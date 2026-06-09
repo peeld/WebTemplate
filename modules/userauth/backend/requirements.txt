@@ -1,0 +1,2 @@
+# Python dependencies for the userauth module.
+# Add packages here as needed; install.sh will pip-install this file.

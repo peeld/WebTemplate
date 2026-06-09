@@ -1,0 +1,9 @@
+{
+  "name": "userauth",
+  "version": "0.1.0",
+  "django_app": "userauth",
+  "npm_package": "@modules/userauth",
+  "url_prefix": "userauth",
+  "requires": [],
+  "description": "User authentication — registration, login, logout, and password management."
+}
