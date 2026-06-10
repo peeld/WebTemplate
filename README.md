@@ -42,13 +42,13 @@ source venv/bin/activate
 ### 3. Install Python dependencies
 
 ```bash
-pip install -r core/backend/requirements.txt
+pip install -r backend/requirements.txt
 ```
 
 ### 4. Configure environment variables
 
 ```bash
-cp core/backend/.env.example core/backend/.env
+cp backend/.env.example backend/.env
 ```
 
 The default values in `.env` are safe for local development — no edits needed to get started. For a real project, replace `SECRET_KEY` with a generated value:
@@ -60,21 +60,21 @@ python -c "from django.core.management.utils import get_random_secret_key; print
 ### 5. Run database migrations
 
 ```bash
-python core/backend/manage.py makemigrations core_app
-python core/backend/manage.py migrate
+python backend/manage.py makemigrations core_app
+python backend/manage.py migrate
 ```
 
 ### 6. Verify the backend
 
 ```bash
-python core/backend/manage.py check
-python core/backend/manage.py test
+python backend/manage.py check
+python backend/manage.py test
 ```
 
 Both should complete with no errors. Then start the dev server:
 
 ```bash
-python core/backend/manage.py runserver
+python backend/manage.py runserver
 ```
 
 `GET http://localhost:8000/api/health/` should return:
@@ -85,8 +85,7 @@ python core/backend/manage.py runserver
 ### 7. Install frontend dependencies
 
 ```bash
-cd core/frontend
-npm install
+cd frontend && npm install
 ```
 
 ### 8. Start the frontend dev server
@@ -107,7 +106,7 @@ From the project root with the venv activated:
 python install.py add <module_name>
 ```
 
-The script installs Python and Node dependencies, runs migrations, and updates the frontend route manifest. No manual edits to settings or URLs are needed.
+The script installs Python and Node dependencies, creates symlinks in `backend/` and `frontend/modules/`, runs migrations, and regenerates the frontend route manifest. No manual edits to settings or URLs are needed.
 
 To remove a module:
 
@@ -121,12 +120,12 @@ python install.py remove <module_name>
 
 Backend:
 ```bash
-python core/backend/manage.py test
+python backend/manage.py test
 ```
 
 Frontend (lint):
 ```bash
-cd core/frontend && npm run lint
+cd frontend && npm run lint
 ```
 
 ---

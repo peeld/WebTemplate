@@ -4,6 +4,7 @@ install.py -- module lifecycle manager
 Usage:
     python install.py add <module_name>
     python install.py remove <module_name>
+    python install.py regen
 
 Must be run with the project venv activated (same requirement as manage.py).
 """
@@ -16,8 +17,8 @@ from pathlib import Path
 
 ROOT_DIR     = Path(__file__).resolve().parent
 MODULES_DIR  = ROOT_DIR / "modules"
-BACKEND_DIR  = ROOT_DIR / "core" / "backend"
-FRONTEND_DIR = ROOT_DIR / "core" / "frontend"
+BACKEND_DIR  = ROOT_DIR / "backend"
+FRONTEND_DIR = ROOT_DIR / "frontend"
 MANIFEST     = FRONTEND_DIR / "src" / "modules.js"
 MANAGE_PY    = BACKEND_DIR / "manage.py"
 
@@ -54,6 +55,41 @@ def _load_module_json(module_dir):
         return json.load(f)
 
 
+def _topo_sort(graph):
+    """Topological sort of module names so dependencies precede dependents.
+
+    graph: dict mapping module_name -> list of required module names.
+    Raises ValueError on circular dependency.
+    """
+    from collections import deque
+
+    installed = set(graph)
+    in_degree = {name: 0 for name in installed}
+    dependents = {name: [] for name in installed}
+
+    for name, requires in graph.items():
+        for req in requires:
+            if req in installed:
+                in_degree[name] += 1
+                dependents[req].append(name)
+
+    queue = deque(sorted(n for n in installed if in_degree[n] == 0))
+    result = []
+    while queue:
+        node = queue.popleft()
+        result.append(node)
+        for dep in sorted(dependents[node]):
+            in_degree[dep] -= 1
+            if in_degree[dep] == 0:
+                queue.append(dep)
+
+    if len(result) != len(installed):
+        cycle = sorted(n for n in installed if n not in result)
+        raise ValueError(f"Circular dependency detected among modules: {cycle}")
+
+    return result
+
+
 # ---------------------------------------------------------------------------
 # Manifest generation
 # ---------------------------------------------------------------------------
@@ -67,7 +103,7 @@ def _module_exports(module_dir, name):
 
 
 def generate_manifest(exclude=None):
-    """Rewrite core/frontend/src/modules.js from the current modules/ state.
+    """Rewrite frontend/src/modules.js from the current modules/ state.
 
     exclude: module name to omit from the manifest (used during 'remove'
              before the directory has been deleted).
@@ -82,9 +118,9 @@ def generate_manifest(exclude=None):
             continue
         if not (module_dir / "module.json").exists():
             continue
-        has_providers   = _module_exports(module_dir, "providers")
-        has_navbar_end  = _module_exports(module_dir, "NavbarEnd")
-        named_imports = f"routes as {name}Routes, navItems as {name}Nav"
+        has_providers  = _module_exports(module_dir, "providers")
+        has_navbar_end = _module_exports(module_dir, "NavbarEnd")
+        named_imports  = f"routes as {name}Routes, navItems as {name}Nav"
         if has_providers:
             named_imports += f", providers as {name}Providers"
         if has_navbar_end:
@@ -126,6 +162,72 @@ def generate_manifest(exclude=None):
 
 
 # ---------------------------------------------------------------------------
+# installed_modules.py generation
+# ---------------------------------------------------------------------------
+
+def generate_installed_modules(exclude=None):
+    """Write backend/core/installed_modules.py from the current modules/ state.
+
+    exclude: module name to omit (used during 'remove').
+    """
+    graph = {}
+    extra_apps_map = {}
+    extra_mw_map = {}
+    settings_map = {}
+
+    for entry in sorted(MODULES_DIR.iterdir()):
+        if not entry.is_dir():
+            continue
+        if not (entry / "module.json").exists():
+            continue
+        name = entry.name
+        if name == exclude:
+            continue
+
+        data = _load_module_json(entry)
+        graph[name] = data.get("requires", [])
+        extra_apps_map[name] = data.get("django_apps", [])
+        extra_mw_map[name] = data.get("middleware", [])
+        settings_map[name] = data.get("settings_defaults", {})
+
+    ordered = _topo_sort(graph)
+
+    seen_apps = set()
+    extra_apps = []
+    for name in ordered:
+        for app in extra_apps_map.get(name, []):
+            if app not in seen_apps:
+                seen_apps.add(app)
+                extra_apps.append(app)
+
+    seen_mw = set()
+    extra_middleware = []
+    for name in ordered:
+        for mw in extra_mw_map.get(name, []):
+            if mw not in seen_mw:
+                seen_mw.add(mw)
+                extra_middleware.append(mw)
+
+    settings_defaults = {}
+    for name in ordered:
+        for key, value in settings_map.get(name, {}).items():
+            if key not in settings_defaults:
+                settings_defaults[key] = value
+
+    out = BACKEND_DIR / "core" / "installed_modules.py"
+    lines = [
+        "# Generated by install.py — do not edit by hand.",
+        f"INSTALLED_MODULE_APPS   = {ordered!r}",
+        f"MODULE_EXTRA_APPS       = {extra_apps!r}",
+        f"MODULE_EXTRA_MIDDLEWARE = {extra_middleware!r}",
+        f"MODULE_SETTINGS         = {settings_defaults!r}",
+        "",
+    ]
+    out.write_text("\n".join(lines))
+    print(f"  + Regenerated {out.relative_to(ROOT_DIR)}")
+
+
+# ---------------------------------------------------------------------------
 # Add
 # ---------------------------------------------------------------------------
 
@@ -156,23 +258,41 @@ def add(name):
             print("  Installing Python packages...")
             _run(sys.executable, "-m", "pip", "install", "-r", str(req_file), "-q")
 
-    # Django migrations
-    print("  Running migrations...")
-    _run(sys.executable, str(MANAGE_PY), "migrate")
+    # Backend symlink: backend/<name> -> ../modules/<name>/backend/<name>
+    app_src = MODULES_DIR / name / "backend" / name
+    if not app_src.exists():
+        _die(f"Django app directory not found: {app_src}")
+    backend_link = BACKEND_DIR / name
+    if not backend_link.exists():
+        target = Path("../modules") / name / "backend" / name
+        backend_link.symlink_to(target)
+        print(f"  + Created symlink backend/{name} -> {target}")
 
-    # Frontend packages (npm workspaces links the new module automatically)
+    # Frontend symlink: frontend/modules/<name> -> ../../modules/<name>/frontend
+    (FRONTEND_DIR / "modules").mkdir(exist_ok=True)
+    frontend_link = FRONTEND_DIR / "modules" / name
+    if not frontend_link.exists():
+        target = Path("../../modules") / name / "frontend"
+        frontend_link.symlink_to(target)
+        print(f"  + Created symlink frontend/modules/{name} -> {target}")
+
+    # Regenerate manifests
+    generate_manifest()
+    generate_installed_modules()
+
+    # npm install (picks up new workspace entry via symlink)
     print("  Installing frontend packages...")
     _run(_npm(), "install", "--silent", cwd=FRONTEND_DIR)
 
-    # Regenerate the frontend route manifest
-    generate_manifest()
+    # Django migrations
+    print("  Running migrations...")
+    _run(sys.executable, str(MANAGE_PY), "migrate")
 
     # Remind about any manual settings that can't be automated
     settings_doc = module_dir / "backend" / manifest.get("django_app", name) / "module_settings.py"
     if settings_doc.exists():
         print(f"\nNOTE: {settings_doc.relative_to(ROOT_DIR)} contains additional settings")
-        print("  (env vars, dict merges, SIMPLE_JWT config, etc.) that must be applied manually.")
-        print("  Review that file and merge any required values into core/backend/core/settings/.")
+        print("  Review that file and merge any required values into backend/core/settings/.")
 
     print(f"\nDone. Module '{name}' installed.")
 
@@ -198,26 +318,59 @@ def remove(name):
         if name in other.get("requires", []):
             _die(f"Cannot remove '{name}' -- module '{other_dir.name}' depends on it.")
 
-    # Regenerate manifest now, excluding this module
+    # Regenerate manifests excluding this module
     generate_manifest(exclude=name)
+    generate_installed_modules(exclude=name)
 
-    print(f"Done. Module '{name}' removed from manifest.")
+    # Remove backend symlink
+    backend_link = BACKEND_DIR / name
+    if backend_link.is_symlink():
+        backend_link.unlink()
+        print(f"  - Removed symlink backend/{name}")
+
+    # Remove frontend symlink
+    frontend_link = FRONTEND_DIR / "modules" / name
+    if frontend_link.is_symlink():
+        frontend_link.unlink()
+        print(f"  - Removed symlink frontend/modules/{name}")
+
+    print(f"Done. Module '{name}' removed.")
     print("NOTE: Run migrations manually to roll back any database changes.")
     print(f"NOTE: Delete modules/{name} (and its git submodule entry) when ready.")
+
+
+# ---------------------------------------------------------------------------
+# Regen
+# ---------------------------------------------------------------------------
+
+def regen():
+    """Regenerate installed_modules.py and modules.js from current modules/ state."""
+    print("Regenerating manifests...")
+    generate_manifest()
+    generate_installed_modules()
+    print("Done.")
 
 
 # ---------------------------------------------------------------------------
 # Entrypoint
 # ---------------------------------------------------------------------------
 
-COMMANDS = {"add": add, "remove": remove}
+COMMANDS = {"add": add, "remove": remove, "regen": regen}
 
 
 def main():
-    if len(sys.argv) != 3 or sys.argv[1] not in COMMANDS:
+    if len(sys.argv) < 2 or sys.argv[1] not in COMMANDS:
         print("Usage: python install.py add|remove <module_name>", file=sys.stderr)
+        print("       python install.py regen", file=sys.stderr)
         sys.exit(1)
-    COMMANDS[sys.argv[1]](sys.argv[2])
+    cmd = sys.argv[1]
+    if cmd == "regen":
+        regen()
+    elif len(sys.argv) != 3:
+        print(f"Usage: python install.py {cmd} <module_name>", file=sys.stderr)
+        sys.exit(1)
+    else:
+        COMMANDS[cmd](sys.argv[2])
 
 
 if __name__ == "__main__":
