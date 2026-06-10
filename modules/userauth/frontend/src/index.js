@@ -32,4 +32,8 @@ export { default as EmailVerifyForm } from './modules/auth/components/EmailVerif
 
 // Provider list for core/main.jsx ModuleProviders wrapper.
 import { AuthProvider } from './modules/auth/context/AuthContext'
-export const providers = [AuthProvider]
+import GoogleProvider from './modules/auth/context/GoogleProvider'
+export const providers = [GoogleProvider, AuthProvider]
+
+// Navbar right-side slot — rendered in core Navbar's navbar-end.
+export { default as NavbarEnd } from './modules/auth/components/NavbarEnd'

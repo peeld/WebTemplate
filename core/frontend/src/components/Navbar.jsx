@@ -1,6 +1,6 @@
 import { useState } from 'react';
 import { NavLink } from 'react-router-dom';
-import { moduleNavItems } from '../modules.js';
+import { moduleNavItems, moduleNavbarEnd } from '../modules.js';
 
 /**
  * Top navigation bar. Module nav items are injected from the generated manifest.
@@ -41,6 +41,14 @@ export default function Navbar() {
             </NavLink>
           ))}
         </div>
+
+        {moduleNavbarEnd.length > 0 && (
+          <div className="navbar-end">
+            {moduleNavbarEnd.map((NavbarEnd, i) => (
+              <NavbarEnd key={i} />
+            ))}
+          </div>
+        )}
       </div>
     </nav>
   );

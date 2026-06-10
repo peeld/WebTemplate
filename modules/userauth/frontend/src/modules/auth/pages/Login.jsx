@@ -67,6 +67,58 @@ import AuthCard                  from '../components/AuthCard'
 import GoogleButton               from '../components/GoogleButton'
 import SiteLogo                  from '@core/frontend/components/SiteLogo'
 
+const GOOGLE_ENABLED = Boolean(import.meta.env.VITE_GOOGLE_CLIENT_ID)
+
+function GoogleLoginSection({ setError, setGLoading, disabled, login, navigate }) {
+  const glogin = useGoogleLogin({
+    onSuccess: async (tokenResponse) => {
+      setGLoading(true)
+      setError('')
+      addBreadcrumb('Google login attempt', {}, 'info')
+
+      try {
+        const res  = await authApi.loginWithGoogle(tokenResponse.access_token)
+        const data = await res.json()
+
+        if (!res.ok) {
+          captureWarning('Google login backend rejection', { status: res.status, error: data?.error })
+          setError(data?.error || 'Google sign-in failed. Please try again.')
+          return
+        }
+
+        if (!data.access) {
+          captureWarning('Google login response missing access token', {
+            hasAccess: Boolean(data.access), hasRefresh: Boolean(data.refresh),
+          })
+          setError('Unexpected response from server. Please try again.')
+          return
+        }
+        if (!data.refresh) {
+          captureWarning('Google login returned empty refresh token — fix backend social auth view', {
+            endpoint: '/auth/social/google/',
+          })
+        }
+
+        const username = data.user?.username || data.user?.email
+        login(data.access, data.refresh, username)
+        navigate('/dashboard')
+
+      } catch (err) {
+        captureWarning('Google login network failure', { error: err.message })
+        setError('Could not reach the server. Check your connection.')
+      } finally {
+        setGLoading(false)
+      }
+    },
+    onError: (err) => {
+      captureWarning('Google OAuth popup error', { error: String(err) })
+      setError('Google sign-in was cancelled or failed. Please try again.')
+    },
+  })
+
+  return <GoogleButton label="Sign in with Google" onClick={() => glogin()} disabled={disabled} />
+}
+
 export default function Login() {
   const { login }  = useAuth()
   const navigate   = useNavigate()
@@ -127,67 +179,6 @@ export default function Login() {
     }
   }
 
-  // ── Google OAuth login ────────────────────────────────────────────────────
-
-  const glogin = useGoogleLogin({
-    onSuccess: async (tokenResponse) => {
-      setGLoading(true)
-      setError('')
-      addBreadcrumb('Google login attempt', {}, 'info')
-
-      try {
-        const res  = await authApi.loginWithGoogle(tokenResponse.access_token)
-        const data = await res.json()
-
-        if (!res.ok) {
-          captureWarning('Google login backend rejection', {
-            status: res.status,
-            error:  data?.error,
-          })
-          setError(data?.error || 'Google sign-in failed. Please try again.')
-          return
-        }
-
-        // Only access token is required — Google OAuth via some backends
-        // returns an empty refresh token. We tolerate this and log a warning
-        // so it can be fixed on the backend, but do not block the login.
-        // AuthContext will log the user out when the access token expires if
-        // no valid refresh token is available.
-        if (!data.access) {
-          captureWarning("Google login response missing access token", {
-            hasAccess:  Boolean(data.access),
-            hasRefresh: Boolean(data.refresh),
-          })
-          setError("Unexpected response from server. Please try again.")
-          return
-        }
-        if (!data.refresh) {
-          captureWarning("Google login returned empty refresh token — fix backend social auth view", {
-            endpoint: "/auth/social/google/",
-          })
-        }
-
-        // Prefer username; fall back to email for accounts that have no username.
-        const username = data.user?.username || data.user?.email
-        login(data.access, data.refresh, username)
-        navigate('/dashboard')
-
-      } catch (err) {
-        captureWarning('Google login network failure', { error: err.message })
-        setError('Could not reach the server. Check your connection.')
-      } finally {
-        setGLoading(false)
-      }
-    },
-
-    onError: (err) => {
-      // Fires when the Google popup fails or the user cancels.
-      // Could also indicate a misconfigured OAuth client ID.
-      captureWarning('Google OAuth popup error', { error: String(err) })
-      setError('Google sign-in was cancelled or failed. Please try again.')
-    },
-  })
-
   const isAnyLoading = loading || gLoading
 
   // ── Render ────────────────────────────────────────────────────────────────
@@ -243,12 +234,15 @@ export default function Login() {
                 </div>
               </form>
 
-              <GoogleButton
-                label="Sign in with Google"
-                onClick={() => glogin()}
-                loading={gLoading}
-                disabled={isAnyLoading}
-              />
+              {GOOGLE_ENABLED && (
+                <GoogleLoginSection
+                  setError={setError}
+                  setGLoading={setGLoading}
+                  disabled={isAnyLoading}
+                  login={login}
+                  navigate={navigate}
+                />
+              )}
 
             </AuthCard>
 

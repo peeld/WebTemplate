@@ -77,11 +77,31 @@ REST_FRAMEWORK = {
         'rest_framework.renderers.JSONRenderer',
     ],
     'DEFAULT_AUTHENTICATION_CLASSES': [
+        'rest_framework_simplejwt.authentication.JWTAuthentication',
         'rest_framework.authentication.SessionAuthentication',
     ],
     'DEFAULT_PERMISSION_CLASSES': [
         'rest_framework.permissions.IsAuthenticated',
     ],
+}
+
+from datetime import timedelta
+SIMPLE_JWT = {
+    'ACCESS_TOKEN_LIFETIME':  timedelta(hours=1),
+    'REFRESH_TOKEN_LIFETIME': timedelta(days=7),
+    'ROTATE_REFRESH_TOKENS':  True,
+}
+
+SOCIALACCOUNT_PROVIDERS = {
+    'google': {
+        'APP': {
+            'client_id': os.environ.get('GOOGLE_CLIENT_ID', ''),
+            'secret':    os.environ.get('GOOGLE_CLIENT_SECRET', ''),
+            'key':       '',
+        },
+        'SCOPE': ['profile', 'email'],
+        'AUTH_PARAMS': {'access_type': 'online'},
+    }
 }
 
 LANGUAGE_CODE = 'en-us'
@@ -137,21 +157,29 @@ def _topo_sort(graph):
 
 
 def _discover_modules(modules_dir):
-    """Return Django app labels for all valid modules, ordered by dependency.
+    """Return (module_apps, extra_apps, extra_middleware, settings_defaults) for all valid modules.
 
-    Reads each module's module.json `requires` field to produce a topological
-    ordering so dependencies always appear before dependents in INSTALLED_APPS.
-    Falls back gracefully when module.json is absent or malformed.
-    Also inserts each module's backend/ directory into sys.path so Django
-    can import the app package. Safe to call multiple times (no duplicate paths).
+    module_apps       — Django app labels for the modules themselves, topo-sorted.
+    extra_apps        — Third-party Django apps declared via module.json django_apps.
+    extra_middleware  — Middleware strings declared via module.json middleware.
+    settings_defaults — Dict of plain key/value settings from module.json settings_defaults.
+                        Earlier modules win (first declaration wins on key collision).
+
+    Reads module.json `requires` for topological ordering.
+    Inserts each module's backend/ directory into sys.path.
+    Safe to call multiple times (no duplicate paths).
     """
     import json
     import logging
 
     if not modules_dir.exists():
-        return []
+        return [], [], [], {}
 
-    graph = {}  # name -> [required module names]
+    graph = {}            # name -> [required module names]
+    extra_apps_map = {}   # name -> [extra django app strings]
+    extra_mw_map = {}     # name -> [extra middleware strings]
+    settings_map = {}     # name -> {key: value}
+
     for entry in sorted(modules_dir.iterdir()):
         if not entry.is_dir():
             continue
@@ -164,21 +192,74 @@ def _discover_modules(modules_dir):
             sys.path.insert(0, backend_path)
 
         requires = []
+        extra_apps_map[entry.name] = []
+        extra_mw_map[entry.name] = []
+        settings_map[entry.name] = {}
+
         manifest = entry / "module.json"
         if manifest.exists():
             try:
-                requires = json.loads(manifest.read_text()).get("requires", [])
+                data = json.loads(manifest.read_text())
+                requires = data.get("requires", [])
                 assert isinstance(requires, list), "requires must be a list"
+                extra_apps = data.get("django_apps", [])
+                assert isinstance(extra_apps, list), "django_apps must be a list"
+                extra_mw = data.get("middleware", [])
+                assert isinstance(extra_mw, list), "middleware must be a list"
+                s_defaults = data.get("settings_defaults", {})
+                assert isinstance(s_defaults, dict), "settings_defaults must be a dict"
+                extra_apps_map[entry.name] = extra_apps
+                extra_mw_map[entry.name] = extra_mw
+                settings_map[entry.name] = s_defaults
             except (json.JSONDecodeError, AssertionError, OSError) as exc:
                 logging.getLogger(__name__).warning(
-                    "module.json in %s is invalid (%s); ignoring requires", entry.name, exc
+                    "module.json in %s is invalid (%s); ignoring extra config", entry.name, exc
                 )
 
         graph[entry.name] = requires
 
-    return _topo_sort(graph)
+    ordered = _topo_sort(graph)
+
+    seen_apps = set()
+    extra_apps = []
+    for name in ordered:
+        for app in extra_apps_map.get(name, []):
+            if app not in seen_apps:
+                seen_apps.add(app)
+                extra_apps.append(app)
+
+    seen_mw = set()
+    extra_middleware = []
+    for name in ordered:
+        for mw in extra_mw_map.get(name, []):
+            if mw not in seen_mw:
+                seen_mw.add(mw)
+                extra_middleware.append(mw)
+
+    settings_defaults = {}
+    for name in ordered:
+        for key, value in settings_map.get(name, {}).items():
+            if key not in settings_defaults:
+                settings_defaults[key] = value
+
+    return ordered, extra_apps, extra_middleware, settings_defaults
 
 
 # Kept separate from INSTALLED_APPS so urls.py can iterate only module apps.
-INSTALLED_MODULE_APPS = _discover_modules(MODULES_DIR)
-INSTALLED_APPS += INSTALLED_MODULE_APPS
+INSTALLED_MODULE_APPS, _module_extra_apps, _module_extra_middleware, _module_settings = (
+    _discover_modules(MODULES_DIR)
+)
+INSTALLED_APPS += _module_extra_apps + INSTALLED_MODULE_APPS
+MIDDLEWARE += _module_extra_middleware
+
+# Apply module settings_defaults — only sets keys not already defined in this file.
+import importlib as _importlib
+_current_module = _importlib.import_module(__name__)
+for _key, _val in _module_settings.items():
+    if not hasattr(_current_module, _key):
+        globals()[_key] = _val
+del _current_module, _importlib, _key, _val
+
+# Required by django.contrib.sites (added automatically when a module declares it).
+if 'django.contrib.sites' in INSTALLED_APPS:
+    SITE_ID = 1

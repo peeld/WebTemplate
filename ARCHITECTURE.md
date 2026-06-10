@@ -86,11 +86,16 @@ Declares everything `install.py` and the auto-discovery system need to know.
   "npm_package": "@modules/auth",
   "url_prefix": "auth",
   "requires": [],
+  "pip_packages": [
+    "djangorestframework-simplejwt>=5.3"
+  ],
   "description": "JWT authentication, user management, and permission groups."
 }
 ```
 
 `requires` lists other module names that must be installed first. `install.py` checks this before proceeding.
+
+`pip_packages` lists Python packages (pip specifiers) that `install.py` will install into the venv. This is the authoritative declaration of a module's Python dependencies. If omitted, `install.py` falls back to `backend/requirements.txt`.
 
 ---
 

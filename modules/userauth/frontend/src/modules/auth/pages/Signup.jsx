@@ -33,10 +33,53 @@ import EmailVerifyForm    from '../components/EmailVerifyForm'
 import { captureError, captureWarning, addBreadcrumb } from '@core/frontend/utils/logger'
 
 const SIGNUP_STEPS = ['Account', 'Verify']
+const GOOGLE_ENABLED = Boolean(import.meta.env.VITE_GOOGLE_CLIENT_ID)
+
+function GoogleSignupSection({ username, setErrors, setGLoading, gLoading, disabled, login, navigate, removeRecaptcha }) {
+  const handleGoogleSignup = useGoogleLogin({
+    onSuccess: async (tokenResponse) => {
+      setGLoading(true)
+      setErrors({})
+      addBreadcrumb('Google signup attempt', {}, 'info')
+      try {
+        const res  = await authApi.registerWithGoogle(tokenResponse.access_token, username)
+        const data = await res.json()
+
+        if (!res.ok) {
+          captureWarning('Google signup rejected', { status: res.status })
+          setErrors({ non_field_errors: [data?.error || 'Google signup failed — please try again'] })
+          return
+        }
+
+        login(data.access, data.refresh, data.user.username)
+        removeRecaptcha()
+        navigate('/dashboard', { replace: true })
+      } catch (err) {
+        captureError(err, { operation: 'google_signup' }, 'auth')
+        setErrors({ non_field_errors: ['Could not reach the server. Check your connection.'] })
+      } finally {
+        setGLoading(false)
+      }
+    },
+    onError: (err) => {
+      captureWarning('Google OAuth signup popup error', { error: String(err) })
+      setErrors({ non_field_errors: ['Google sign-up was cancelled or failed. Please try again.'] })
+    },
+  })
+
+  return (
+    <GoogleButton
+      label="Sign up with Google"
+      onClick={() => handleGoogleSignup()}
+      loading={gLoading}
+      disabled={disabled}
+    />
+  )
+}
 
 // ─── Step 0: Account ─────────────────────────────────────────────────────────
 
-function Step0Account({ form, onChange, onSubmit, loading, errors, onGoogleSignup, gLoading }) {
+function Step0Account({ form, onChange, onSubmit, loading, errors, gLoading, googleSection }) {
   const isAnyLoading = loading || gLoading
 
   const getFieldError = (fieldName) => {
@@ -96,12 +139,7 @@ function Step0Account({ form, onChange, onSubmit, loading, errors, onGoogleSignu
           </div>
         </form>
 
-        <GoogleButton
-          label="Sign up with Google"
-          onClick={onGoogleSignup}
-          loading={gLoading}
-          disabled={isAnyLoading}
-        />
+        {googleSection}
 
         <p className="has-text-centered has-text-muted mt-4" style={{ fontSize: '0.82rem' }}>
           Already have an account?{' '}
@@ -170,39 +208,6 @@ export default function Signup() {
     }
   }
 
-  // ── Step 0: Google signup ─────────────────────────────────────────────────
-
-  const handleGoogleSignup = useGoogleLogin({
-    onSuccess: async (tokenResponse) => {
-      setGLoading(true)
-      setErrors({})
-      addBreadcrumb('Google signup attempt', {}, 'info')
-      try {
-        const res  = await authApi.registerWithGoogle(tokenResponse.access_token, form.username)
-        const data = await res.json()
-
-        if (!res.ok) {
-          captureWarning('Google signup rejected', { status: res.status })
-          setErrors({ non_field_errors: [data?.error || 'Google signup failed — please try again'] })
-          return
-        }
-
-        login(data.access, data.refresh, data.user.username)
-        removeRecaptcha()
-        navigate('/dashboard', { replace: true })
-      } catch (err) {
-        captureError(err, { operation: 'google_signup' }, 'auth')
-        setErrors({ non_field_errors: ['Could not reach the server. Check your connection.'] })
-      } finally {
-        setGLoading(false)
-      }
-    },
-    onError: (err) => {
-      captureWarning('Google OAuth signup popup error', { error: String(err) })
-      setErrors({ non_field_errors: ['Google sign-up was cancelled or failed. Please try again.'] })
-    },
-  })
-
   // ── Step 1: email verification ────────────────────────────────────────────
 
   const handleVerify = async () => {
@@ -259,8 +264,19 @@ export default function Signup() {
                 form={form} onChange={handleChange}
                 onSubmit={handleAccountSubmit}
                 loading={loading} errors={errors}
-                onGoogleSignup={() => handleGoogleSignup()}
                 gLoading={gLoading}
+                googleSection={GOOGLE_ENABLED && (
+                  <GoogleSignupSection
+                    username={form.username}
+                    setErrors={setErrors}
+                    setGLoading={setGLoading}
+                    gLoading={gLoading}
+                    disabled={loading || gLoading}
+                    login={login}
+                    navigate={navigate}
+                    removeRecaptcha={removeRecaptcha}
+                  />
+                )}
               />
             )}
             {step === 1 && (
