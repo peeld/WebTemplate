@@ -26,12 +26,17 @@
     "allauth.account.middleware.AccountMiddleware"
   ],
   "settings_defaults": {
+    "SITE_ID": 1,
     "FRONTEND_URL": "http://localhost:5173",
     "ACCOUNT_LOGIN_METHODS": {"username": true},
     "ACCOUNT_SIGNUP_FIELDS": ["email*", "username*", "password1*", "password2*"],
     "ACCOUNT_EMAIL_VERIFICATION": "none",
-    "REST_USE_JWT": true,
-    "JWT_AUTH_COOKIE": null,
+    "REST_AUTH": {
+      "USE_JWT": true,
+      "JWT_AUTH_COOKIE": null,
+      "TOKEN_MODEL": null
+    },
+    "EMAIL_BACKEND": "django_ses.SESBackend",
     "RECAPTCHA_SITE_KEY": "",
     "RECAPTCHA_SECRET_KEY": ""
   },

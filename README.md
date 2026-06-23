@@ -23,7 +23,17 @@ git clone --recurse-submodules <repo-url>
 cd WebTemplate
 ```
 
-### 2. Create and activate the virtual environment
+### 2. Regenerate manifests
+
+`modules.js` and `installed_modules.py` are generated files and not tracked in git. After cloning, run:
+
+```bash
+python install.py regen
+```
+
+This regenerates `core/frontend/src/modules.js` and `core/backend/core/installed_modules.py` from the installed modules. Safe to run with no modules installed.
+
+### 3. Create and activate the virtual environment
 
 ```bash
 python -m venv venv

@@ -30,7 +30,10 @@ export { default as AuthCard }   from './components/AuthCard'
 export { default as FormField }  from './components/FormField'
 export { default as GoogleButton } from './components/GoogleButton'
 export { default as NavbarEnd }  from './components/NavbarEnd'
+export { default as GoogleProvider } from './context/GoogleProvider'
 
 // Provider list for core/main.jsx ModuleProviders wrapper.
+// GoogleProvider must wrap the app so useGoogleLogin() works inside Login/Signup.
 import { AuthProvider } from './context/AuthContext'
-export const providers = [AuthProvider]
+import GoogleProvider   from './context/GoogleProvider'
+export const providers = [GoogleProvider, AuthProvider]

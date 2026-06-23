@@ -9,6 +9,8 @@ Usage:
 Must be run with the project venv activated (same requirement as manage.py).
 """
 import json
+import os
+import re
 import shutil
 import subprocess
 import sys
@@ -36,6 +38,43 @@ def _run(*cmd, cwd=None):
     result = subprocess.run(cmd, cwd=cwd)
     if result.returncode != 0:
         _die(f"Command failed (exit {result.returncode}): {' '.join(str(c) for c in cmd)}")
+
+
+def _link_dir(link: Path, target: Path):
+    """Create a directory symlink; fall back to a Windows junction on privilege error."""
+    try:
+        link.symlink_to(target)
+    except OSError as exc:
+        if sys.platform != "win32" or getattr(exc, "winerror", None) != 1314:
+            raise
+        abs_target = (link.parent / target).resolve()
+        result = subprocess.run(
+            ["cmd", "/c", "mklink", "/J", str(link), str(abs_target)],
+            capture_output=True, text=True,
+        )
+        if result.returncode != 0:
+            _die(f"Failed to create junction: {result.stderr.strip()}")
+
+
+def _is_dir_link(path: Path) -> bool:
+    """Return True if path is a symlink or a Windows junction (reparse point)."""
+    if path.is_symlink():
+        return True
+    if sys.platform == "win32" and path.is_dir():
+        try:
+            attrs = os.stat(str(path), follow_symlinks=False).st_file_attributes
+            return bool(attrs & 0x400)  # FILE_ATTRIBUTE_REPARSE_POINT
+        except OSError:
+            pass
+    return False
+
+
+def _unlink_dir(path: Path):
+    """Remove a symlink or Windows junction without touching the target contents."""
+    if path.is_symlink():
+        path.unlink()
+    elif sys.platform == "win32":
+        os.rmdir(str(path))
 
 
 def _npm():
@@ -90,6 +129,74 @@ def _topo_sort(graph):
 
 
 # ---------------------------------------------------------------------------
+# Dict deep-merge
+# ---------------------------------------------------------------------------
+
+def _deep_merge(base, override):
+    """Recursively merge override into base in-place. Dicts recurse; lists extend; scalars overwrite."""
+    for key, val in override.items():
+        if key in base and isinstance(base[key], dict) and isinstance(val, dict):
+            _deep_merge(base[key], val)
+        elif key in base and isinstance(base[key], list) and isinstance(val, list):
+            base[key].extend(val)
+        else:
+            base[key] = val
+
+
+# ---------------------------------------------------------------------------
+# Route collision detection
+# ---------------------------------------------------------------------------
+
+_PATH_RE = re.compile(r"""path\s*:\s*['"`]([^'"`]+)['"`]""")
+_PARAM_RE = re.compile(r":[^/]+")
+
+
+def _extract_paths(module_dir):
+    """Return list of path strings from a module's routes.(jsx|js) file."""
+    for name in ("routes.jsx", "routes.js"):
+        f = module_dir / "frontend" / "src" / name
+        if f.exists():
+            return _PATH_RE.findall(f.read_text(encoding="utf-8", errors="replace"))
+    return []
+
+
+def _check_route_collisions(exclude=None):
+    """Abort on exact route duplicates; warn on parameterized structural conflicts."""
+    exact = {}          # path -> module_name
+    parameterized = {}  # normalized -> [(original_path, module_name)]
+
+    for module_dir in sorted(MODULES_DIR.iterdir()):
+        if not module_dir.is_dir():
+            continue
+        name = module_dir.name
+        if name == exclude:
+            continue
+        if not (module_dir / "module.json").exists():
+            continue
+
+        for path in dict.fromkeys(_extract_paths(module_dir)):
+            if ":" in path or "*" in path:
+                normalized = _PARAM_RE.sub(":param", path)
+                parameterized.setdefault(normalized, []).append((path, name))
+            else:
+                if path in exact:
+                    _die(
+                        f"Route collision: '{path}' is registered by both "
+                        f"'{exact[path]}' and '{name}'."
+                    )
+                exact[path] = name
+
+    for normalized, entries in parameterized.items():
+        if len(entries) > 1:
+            details = ", ".join(f"'{m}' ({p})" for p, m in entries)
+            print(
+                f"WARNING: Parameterized route conflict — '{normalized}' "
+                f"matched by {details}",
+                file=sys.stderr,
+            )
+
+
+# ---------------------------------------------------------------------------
 # Manifest generation
 # ---------------------------------------------------------------------------
 
@@ -103,7 +210,9 @@ def generate_manifest(exclude=None):
     navItems) can be absent from a module without causing a static import
     error. Missing exports resolve to undefined and are guarded with ?? [].
     """
-    imports, route_items, nav_items, provider_items = [], [], [], []
+    _check_route_collisions(exclude=exclude)
+
+    imports, route_items, nav_items, provider_items, navbar_end_items = [], [], [], [], []
 
     for module_dir in sorted(MODULES_DIR.iterdir()):
         if not module_dir.is_dir():
@@ -117,6 +226,7 @@ def generate_manifest(exclude=None):
         route_items.append(f"  ...({name}Module.routes ?? []),")
         nav_items.append(f"  ...({name}Module.navItems ?? []),")
         provider_items.append(f"  ...({name}Module.providers ?? []),")
+        navbar_end_items.append(f"  ...({name}Module.navbarEnd ?? []),")
 
     lines = ["// Generated by install.py -- do not edit by hand."]
     if imports:
@@ -134,6 +244,10 @@ def generate_manifest(exclude=None):
         "",
         "export const moduleProviders = [",
         *provider_items,
+        "];",
+        "",
+        "export const moduleNavbarEnd = [",
+        *navbar_end_items,
         "];",
         "",  # trailing newline
     ]
@@ -194,6 +308,18 @@ def generate_installed_modules(exclude=None):
         for key, value in settings_map.get(name, {}).items():
             if key not in settings_defaults:
                 settings_defaults[key] = value
+            elif isinstance(settings_defaults[key], dict) and isinstance(value, dict):
+                _deep_merge(settings_defaults[key], value)
+            elif isinstance(settings_defaults[key], list) and isinstance(value, list):
+                settings_defaults[key].extend(value)
+            else:
+                if settings_defaults[key] != value:
+                    print(
+                        f"WARNING: Module '{name}' overrides scalar setting '{key}' "
+                        f"(last-installed wins).",
+                        file=sys.stderr,
+                    )
+                settings_defaults[key] = value
 
     out = BACKEND_DIR / "core" / "installed_modules.py"
     lines = [
@@ -246,16 +372,8 @@ def add(name):
     backend_link = BACKEND_DIR / name
     if not backend_link.exists():
         target = Path("../../modules") / name / "backend" / name
-        backend_link.symlink_to(target)
-        print(f"  + Created symlink core/backend/{name} -> {target}")
-
-    # Frontend symlink: core/frontend/modules/<name> -> ../../../modules/<name>/frontend
-    (FRONTEND_DIR / "modules").mkdir(exist_ok=True)
-    frontend_link = FRONTEND_DIR / "modules" / name
-    if not frontend_link.exists():
-        target = Path("../../../modules") / name / "frontend"
-        frontend_link.symlink_to(target)
-        print(f"  + Created symlink core/frontend/modules/{name} -> {target}")
+        _link_dir(backend_link, target)
+        print(f"  + Linked core/backend/{name} -> {target}")
 
     # Regenerate manifests
     generate_manifest()
@@ -282,7 +400,7 @@ def add(name):
 # Remove
 # ---------------------------------------------------------------------------
 
-def remove(name):
+def remove(name, run_migrations=False):
     module_dir = MODULES_DIR / name
     if not module_dir.is_dir():
         _die(f"modules/{name} not found.")
@@ -299,24 +417,39 @@ def remove(name):
         if name in other.get("requires", []):
             _die(f"Cannot remove '{name}' -- module '{other_dir.name}' depends on it.")
 
+    # Determine app label and whether there are real migrations to roll back
+    module_json_path = module_dir / "module.json"
+    manifest = _load_module_json(module_dir) if module_json_path.exists() else {}
+    app_label = manifest.get("django_app", name)
+    migrations_dir = module_dir / "backend" / app_label / "migrations"
+    has_migrations = migrations_dir.is_dir() and any(
+        f.suffix == ".py" and f.name != "__init__.py"
+        for f in migrations_dir.iterdir()
+        if f.is_file()
+    )
+
+    # Migrate zero BEFORE manifests are regenerated — app must still be in INSTALLED_APPS
+    if has_migrations and run_migrations:
+        print(f"  Rolling back migrations for '{app_label}'...")
+        _run(sys.executable, str(MANAGE_PY), "migrate", app_label, "zero")
+
     # Regenerate manifests excluding this module
     generate_manifest(exclude=name)
     generate_installed_modules(exclude=name)
 
-    # Remove backend symlink
+    # Remove backend symlink/junction
     backend_link = BACKEND_DIR / name
-    if backend_link.is_symlink():
-        backend_link.unlink()
-        print(f"  - Removed symlink core/backend/{name}")
-
-    # Remove frontend symlink
-    frontend_link = FRONTEND_DIR / "modules" / name
-    if frontend_link.is_symlink():
-        frontend_link.unlink()
-        print(f"  - Removed symlink core/frontend/modules/{name}")
+    if _is_dir_link(backend_link):
+        _unlink_dir(backend_link)
+        print(f"  - Removed link core/backend/{name}")
 
     print(f"Done. Module '{name}' removed.")
-    print("NOTE: Run migrations manually to roll back any database changes.")
+    if not has_migrations:
+        print(f"  (No migrations for '{app_label}' — nothing to roll back)")
+    elif not run_migrations:
+        print(f"NOTE: Roll back migrations before deleting the module directory:")
+        print(f"      python core/backend/manage.py migrate {app_label} zero")
+        print(f"      (Or re-run: python install.py remove --run-migrations {name})")
     print(f"NOTE: Delete modules/{name} (and its git submodule entry) when ready.")
 
 
@@ -342,11 +475,23 @@ COMMANDS = {"add": add, "remove": remove, "regen": regen}
 def main():
     if len(sys.argv) < 2 or sys.argv[1] not in COMMANDS:
         print("Usage: python install.py add|remove <module_name>", file=sys.stderr)
+        print("       python install.py remove [--run-migrations] <module_name>", file=sys.stderr)
         print("       python install.py regen", file=sys.stderr)
         sys.exit(1)
     cmd = sys.argv[1]
     if cmd == "regen":
         regen()
+    elif cmd == "remove":
+        rest = sys.argv[2:]
+        flags = [a for a in rest if a.startswith("--")]
+        positional = [a for a in rest if not a.startswith("--")]
+        unknown = [f for f in flags if f != "--run-migrations"]
+        if unknown:
+            _die(f"Unknown flag(s) for remove: {' '.join(unknown)}")
+        if len(positional) != 1:
+            print("Usage: python install.py remove [--run-migrations] <module_name>", file=sys.stderr)
+            sys.exit(1)
+        remove(positional[0], run_migrations="--run-migrations" in flags)
     elif len(sys.argv) != 3:
         print(f"Usage: python install.py {cmd} <module_name>", file=sys.stderr)
         sys.exit(1)
