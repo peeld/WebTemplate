@@ -282,7 +282,7 @@ def add(name):
 
     # npm install (picks up new workspace entry via symlink)
     print("  Installing frontend packages...")
-    _run(_npm(), "install", "--silent", cwd=FRONTEND_DIR)
+    _run(_npm(), "install", cwd=FRONTEND_DIR)
 
     # Django migrations
     print("  Running migrations...")

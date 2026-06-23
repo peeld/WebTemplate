@@ -103,6 +103,13 @@ SOCIALACCOUNT_PROVIDERS = {
     }
 }
 
+EMAIL_BACKEND = 'django_ses.SESBackend'
+AWS_ACCESS_KEY_ID = os.environ.get('AWS_ACCESS_KEY_ID', '')
+AWS_SECRET_ACCESS_KEY = os.environ.get('AWS_SECRET_ACCESS_KEY', '')
+AWS_SES_REGION_NAME = os.environ.get('AWS_SES_REGION_NAME', 'us-east-1')
+AWS_SES_REGION_ENDPOINT = f'email.{AWS_SES_REGION_NAME}.amazonaws.com'
+DEFAULT_FROM_EMAIL = os.environ.get('DEFAULT_FROM_EMAIL', '')
+
 LANGUAGE_CODE = 'en-us'
 TIME_ZONE = 'UTC'
 USE_I18N = True
@@ -124,6 +131,19 @@ MIDDLEWARE     += MODULE_EXTRA_MIDDLEWARE
 for _key, _val in MODULE_SETTINGS.items():
     if _key not in dir():
         globals()[_key] = _val
+
+# Stripe — override module defaults with env vars so secrets never live in code.
+STRIPE_SECRET_KEY    = os.environ.get('STRIPE_SECRET_KEY', '')
+STRIPE_PUBLISHABLE_KEY = os.environ.get('STRIPE_PUBLISHABLE_KEY', '')
+STRIPE_WEBHOOK_SECRET = os.environ.get('STRIPE_WEBHOOK_SECRET', '')
+STRIPE_SUCCESS_URL   = os.environ.get('STRIPE_SUCCESS_URL', STRIPE_SUCCESS_URL)
+STRIPE_CANCEL_URL    = os.environ.get('STRIPE_CANCEL_URL', STRIPE_CANCEL_URL)
+
+# File upload — override module defaults with env vars so secrets never live in code.
+AWS_UPLOAD_BUCKET         = os.environ.get('AWS_UPLOAD_BUCKET', '')
+AWS_PROCESSED_BUCKET      = os.environ.get('AWS_PROCESSED_BUCKET', '')
+AWS_S3_REGION             = os.environ.get('AWS_S3_REGION', 'us-east-1')
+FILEUPLOAD_WEBHOOK_SECRET = os.environ.get('FILEUPLOAD_WEBHOOK_SECRET', '')
 
 if 'django.contrib.sites' in INSTALLED_APPS:
     SITE_ID = 1
