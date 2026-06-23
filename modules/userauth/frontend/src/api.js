@@ -1,5 +1,5 @@
 /**
- * auth_api.js
+ * api.js
  *
  * All authentication endpoint calls for the auth module.
  * Each function returns a raw Promise<Response> — callers check res.ok
