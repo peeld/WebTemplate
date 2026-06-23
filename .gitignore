@@ -1,3 +1,6 @@
+done/
+log.txt
+
 # Python
 __pycache__/
 *.py[cod]
