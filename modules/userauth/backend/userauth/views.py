@@ -7,7 +7,7 @@ JWT-authenticated endpoints live elsewhere (profile modules, etc.).
 SECURITY NOTES:
 - verify_recaptcha() required on register endpoint
 - Verification/reset tokens are UUID4 (128-bit); codes are 6-digit (time-limited, email-gated)
-- Generic messages used on forgot_password and resend_verification (prevent email enumeration)
+- Generic messages used on ForgotPasswordView and ResendVerificationView (prevent email enumeration)
 - Tokens deleted after use (one-time use)
 """
 
@@ -17,7 +17,6 @@ from django.conf import settings
 from django.contrib.auth import get_user_model
 from django.db import IntegrityError
 from rest_framework import status
-from rest_framework.decorators import api_view, permission_classes
 from rest_framework.permissions import AllowAny
 from rest_framework.response import Response
 from rest_framework.views import APIView
@@ -160,9 +159,7 @@ class CustomTokenObtainPairView(TokenObtainPairView):
 # EMAIL/PASSWORD AUTH ENDPOINTS
 # ============================================================================
 
-@api_view(['POST'])
-@permission_classes([AllowAny])
-def register(request):
+class RegisterView(APIView):
     """
     POST /api/userauth/register/ — Sign up new user.
 
@@ -172,73 +169,74 @@ def register(request):
     FLOW: reCAPTCHA → validate → create User (inactive) → create token → send email
     Email failure is non-fatal; user can request resend from login page.
     """
-    captcha_token = request.data.get('captcha_token', '').strip()
+    permission_classes = [AllowAny]
 
-    logger.debug('Registration attempt: username=%s', request.data.get('username'))
+    def post(self, request):
+        captcha_token = request.data.get('captcha_token', '').strip()
 
-    if not captcha_token:
-        return Response(
-            {'error': 'reCAPTCHA token is required. Please refresh the page and try again.', 'code': 'missing_captcha_token'},
-            status=status.HTTP_400_BAD_REQUEST,
-        )
+        logger.debug('Registration attempt: username=%s', request.data.get('username'))
 
-    is_valid, recaptcha_error = verify_recaptcha(captcha_token, action='register')
-    if not is_valid:
-        logger.warning('Registration blocked by reCAPTCHA: %s', recaptcha_error)
-        return Response(
-            {'error': recaptcha_error or 'reCAPTCHA verification failed. Please try again.', 'code': 'recaptcha_failed'},
-            status=status.HTTP_400_BAD_REQUEST,
-        )
+        if not captcha_token:
+            return Response(
+                {'error': 'reCAPTCHA token is required. Please refresh the page and try again.', 'code': 'missing_captcha_token'},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
 
-    serializer = RegisterSerializer(data=request.data)
-    if not serializer.is_valid():
-        logger.warning('Registration validation failed: %s', serializer.errors)
-        return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
+        is_valid, recaptcha_error = verify_recaptcha(captcha_token, action='register')
+        if not is_valid:
+            logger.warning('Registration blocked by reCAPTCHA: %s', recaptcha_error)
+            return Response(
+                {'error': recaptcha_error or 'reCAPTCHA verification failed. Please try again.', 'code': 'recaptcha_failed'},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
 
-    try:
-        user = serializer.save()
-        user.is_active = False
-        user.save()
-    except Exception as e:
-        logger.error('User creation failed: %s: %s', type(e).__name__, e, exc_info=True)
-        return Response(
-            {'error': 'Could not create account. Please try again later.', 'code': 'user_creation_failed'},
-            status=status.HTTP_500_INTERNAL_SERVER_ERROR,
-        )
+        serializer = RegisterSerializer(data=request.data)
+        if not serializer.is_valid():
+            logger.warning('Registration validation failed: %s', serializer.errors)
+            return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
 
-    try:
-        EmailVerificationToken.objects.filter(user=user).delete()
-        token = EmailVerificationToken.objects.create(user=user)
-    except Exception as e:
-        logger.error('Token creation failed: %s: %s', type(e).__name__, e, exc_info=True)
-        return Response(
-            {'error': 'Could not set up email verification. Please try again later.', 'code': 'token_creation_failed'},
-            status=status.HTTP_500_INTERNAL_SERVER_ERROR,
-        )
-
-    email_sent = False
-    if user.email:
         try:
-            send_verification_email(user, token.token, token.code)
-            email_sent = True
+            user = serializer.save()
+            user.is_active = False
+            user.save()
         except Exception as e:
-            # Non-fatal — user can resend from login page
-            logger.warning('Failed to send verification email to %s: %s', user.email, e, exc_info=True)
+            logger.error('User creation failed: %s: %s', type(e).__name__, e, exc_info=True)
+            return Response(
+                {'error': 'Could not create account. Please try again later.', 'code': 'user_creation_failed'},
+                status=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            )
 
-    return Response({
-        'message': (
-            'Account created! Please check your email to verify your account.'
-            if email_sent
-            else 'Account created, but we could not send a verification email. '
-                 'Please check your email or request a new code from the login page.'
-        ),
-        'email': user.email,
-    }, status=status.HTTP_201_CREATED)
+        try:
+            EmailVerificationToken.objects.filter(user=user).delete()
+            token = EmailVerificationToken.objects.create(user=user)
+        except Exception as e:
+            logger.error('Token creation failed: %s: %s', type(e).__name__, e, exc_info=True)
+            return Response(
+                {'error': 'Could not set up email verification. Please try again later.', 'code': 'token_creation_failed'},
+                status=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            )
+
+        email_sent = False
+        if user.email:
+            try:
+                send_verification_email(user, token.token, token.code)
+                email_sent = True
+            except Exception as e:
+                # Non-fatal — user can resend from login page
+                logger.warning('Failed to send verification email to %s: %s', user.email, e, exc_info=True)
+
+        return Response({
+            'message': (
+                'Account created! Please check your email to verify your account.'
+                if email_sent
+                else 'Account created, but we could not send a verification email. '
+                     'Please check your email or request a new code from the login page.'
+            ),
+            'email': user.email,
+        }, status=status.HTTP_201_CREATED)
 
 
-@api_view(['POST'])
-@permission_classes([AllowAny])
-def verify_email_code(request):
+class VerifyEmailCodeView(APIView):
     """
     POST /api/userauth/verify-email-code/ — Verify email with 6-digit code (signup inline form).
 
@@ -247,85 +245,87 @@ def verify_email_code(request):
 
     RATE LIMITING: Should be rate-limited (brute-force 6-digit codes).
     """
-    email = request.data.get('email', '').lower().strip()
-    code  = request.data.get('code', '').strip()
+    permission_classes = [AllowAny]
 
-    if not email or not code:
-        return Response({'error': 'Email and code are required'}, status=status.HTTP_400_BAD_REQUEST)
+    def post(self, request):
+        email = request.data.get('email', '').lower().strip()
+        code  = request.data.get('code', '').strip()
 
-    try:
-        user  = User.objects.get(email__iexact=email, is_active=False)
-        token = EmailVerificationToken.objects.get(user=user, code=code)
-    except (User.DoesNotExist, EmailVerificationToken.DoesNotExist):
-        return Response(
-            {'error': 'Invalid email or code. Please check and try again.'},
-            status=status.HTTP_400_BAD_REQUEST,
-        )
+        if not email or not code:
+            return Response({'error': 'Email and code are required'}, status=status.HTTP_400_BAD_REQUEST)
 
-    if token.is_expired():
+        try:
+            user  = User.objects.get(email__iexact=email, is_active=False)
+            token = EmailVerificationToken.objects.get(user=user, code=code)
+        except (User.DoesNotExist, EmailVerificationToken.DoesNotExist):
+            return Response(
+                {'error': 'Invalid email or code. Please check and try again.'},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+
+        if token.is_expired():
+            token.delete()
+            return Response({'error': 'This code has expired. Please request a new one.'}, status=status.HTTP_400_BAD_REQUEST)
+
+        user.is_active = True
+        user.save()
         token.delete()
-        return Response({'error': 'This code has expired. Please request a new one.'}, status=status.HTTP_400_BAD_REQUEST)
 
-    user.is_active = True
-    user.save()
-    token.delete()
+        # Signal: welcome emails, onboarding hooks, etc. listen here.
+        user_email_verified.send(sender=user.__class__, user=user)
 
-    # Signal: welcome emails, onboarding hooks, etc. listen here.
-    user_email_verified.send(sender=user.__class__, user=user)
-
-    refresh = RefreshToken.for_user(user)
-    return Response({
-        'message': 'Email verified successfully.',
-        'user':    user.username,
-        'access':  str(refresh.access_token),
-        'refresh': str(refresh),
-    }, status=status.HTTP_200_OK)
+        refresh = RefreshToken.for_user(user)
+        return Response({
+            'message': 'Email verified successfully.',
+            'user':    user.username,
+            'access':  str(refresh.access_token),
+            'refresh': str(refresh),
+        }, status=status.HTTP_200_OK)
 
 
-@api_view(['POST'])
-@permission_classes([AllowAny])
-def verify_email(request):
+class VerifyEmailView(APIView):
     """
     POST /api/userauth/verify-email/ — Verify email via UUID link token.
 
     Expects: { token }
     Returns: { message, user, access, refresh }
 
-    Different from verify_email_code: this is the link-click flow (/verify-email/:token).
+    Different from VerifyEmailCodeView: this is the link-click flow (/verify-email/:token).
     """
-    token_str = request.data.get('token', '').strip()
-    if not token_str:
-        return Response({'error': 'Token is required'}, status=status.HTTP_400_BAD_REQUEST)
+    permission_classes = [AllowAny]
 
-    try:
-        token = EmailVerificationToken.objects.select_related('user').get(token=token_str)
-    except EmailVerificationToken.DoesNotExist:
-        return Response({'error': 'Invalid or expired verification link'}, status=status.HTTP_400_BAD_REQUEST)
+    def post(self, request):
+        token_str = request.data.get('token', '').strip()
+        if not token_str:
+            return Response({'error': 'Token is required'}, status=status.HTTP_400_BAD_REQUEST)
 
-    if token.is_expired():
+        try:
+            token = EmailVerificationToken.objects.select_related('user').get(token=token_str)
+        except EmailVerificationToken.DoesNotExist:
+            return Response({'error': 'Invalid or expired verification link'}, status=status.HTTP_400_BAD_REQUEST)
+
+        if token.is_expired():
+            token.delete()
+            return Response({'error': 'This link has expired. Please register again.'}, status=status.HTTP_400_BAD_REQUEST)
+
+        user = token.user
+        user.is_active = True
+        user.save()
         token.delete()
-        return Response({'error': 'This link has expired. Please register again.'}, status=status.HTTP_400_BAD_REQUEST)
 
-    user = token.user
-    user.is_active = True
-    user.save()
-    token.delete()
+        # Signal: welcome emails, onboarding hooks, etc. listen here.
+        user_email_verified.send(sender=user.__class__, user=user)
 
-    # Signal: welcome emails, onboarding hooks, etc. listen here.
-    user_email_verified.send(sender=user.__class__, user=user)
-
-    refresh = RefreshToken.for_user(user)
-    return Response({
-        'message': 'Email verified successfully.',
-        'user':    user.username,
-        'access':  str(refresh.access_token),
-        'refresh': str(refresh),
-    }, status=status.HTTP_200_OK)
+        refresh = RefreshToken.for_user(user)
+        return Response({
+            'message': 'Email verified successfully.',
+            'user':    user.username,
+            'access':  str(refresh.access_token),
+            'refresh': str(refresh),
+        }, status=status.HTTP_200_OK)
 
 
-@api_view(['POST'])
-@permission_classes([AllowAny])
-def resend_verification(request):
+class ResendVerificationView(APIView):
     """
     POST /api/userauth/resend-verification/ — Resend verification email/code.
 
@@ -334,34 +334,35 @@ def resend_verification(request):
 
     RATE LIMITING: Should be rate-limited (spam prevention).
     """
-    email = request.data.get('email', '').lower().strip()
-    if not email:
-        return Response({'error': 'Email is required'}, status=status.HTTP_400_BAD_REQUEST)
+    permission_classes = [AllowAny]
 
-    try:
-        user = User.objects.get(email__iexact=email, is_active=False)
-    except User.DoesNotExist:
-        # Generic response to prevent email enumeration
+    def post(self, request):
+        email = request.data.get('email', '').lower().strip()
+        if not email:
+            return Response({'error': 'Email is required'}, status=status.HTTP_400_BAD_REQUEST)
+
+        try:
+            user = User.objects.get(email__iexact=email, is_active=False)
+        except User.DoesNotExist:
+            # Generic response to prevent email enumeration
+            return Response({
+                'message': 'If that email exists and is not yet verified, we have sent a new verification link.'
+            }, status=status.HTTP_200_OK)
+
+        EmailVerificationToken.objects.filter(user=user).delete()
+        token = EmailVerificationToken.objects.create(user=user)
+
+        try:
+            send_verification_email(user, token.token, token.code)
+        except Exception:
+            pass  # Non-fatal; silent failure
+
         return Response({
             'message': 'If that email exists and is not yet verified, we have sent a new verification link.'
         }, status=status.HTTP_200_OK)
 
-    EmailVerificationToken.objects.filter(user=user).delete()
-    token = EmailVerificationToken.objects.create(user=user)
 
-    try:
-        send_verification_email(user, token.token, token.code)
-    except Exception:
-        pass  # Non-fatal; silent failure
-
-    return Response({
-        'message': 'If that email exists and is not yet verified, we have sent a new verification link.'
-    }, status=status.HTTP_200_OK)
-
-
-@api_view(['POST'])
-@permission_classes([AllowAny])
-def forgot_password(request):
+class ForgotPasswordView(APIView):
     """
     POST /api/userauth/forgot-password/ — Request a password reset email.
 
@@ -370,26 +371,27 @@ def forgot_password(request):
 
     RATE LIMITING: Should be rate-limited (spam prevention).
     """
-    email = request.data.get('email', '').lower().strip()
-    if not email:
-        return Response({'error': 'Email is required'}, status=status.HTTP_400_BAD_REQUEST)
+    permission_classes = [AllowAny]
 
-    try:
-        user = User.objects.get(email__iexact=email, is_active=True)
-        PasswordResetToken.objects.filter(user=user, used=False).update(used=True)
-        token = PasswordResetToken.objects.create(user=user)
-        send_password_reset(user, token.token)
-    except User.DoesNotExist:
-        pass  # Don't reveal whether email exists
+    def post(self, request):
+        email = request.data.get('email', '').lower().strip()
+        if not email:
+            return Response({'error': 'Email is required'}, status=status.HTTP_400_BAD_REQUEST)
 
-    return Response({
-        'message': 'If that email exists, we have sent a password reset link.'
-    }, status=status.HTTP_200_OK)
+        try:
+            user = User.objects.get(email__iexact=email, is_active=True)
+            PasswordResetToken.objects.filter(user=user, used=False).update(used=True)
+            token = PasswordResetToken.objects.create(user=user)
+            send_password_reset(user, token.token)
+        except User.DoesNotExist:
+            pass  # Don't reveal whether email exists
+
+        return Response({
+            'message': 'If that email exists, we have sent a password reset link.'
+        }, status=status.HTTP_200_OK)
 
 
-@api_view(['POST'])
-@permission_classes([AllowAny])
-def reset_password(request):
+class ResetPasswordView(APIView):
     """
     POST /api/userauth/reset-password/ — Reset password with a UUID token.
 
@@ -398,30 +400,33 @@ def reset_password(request):
 
     SECURITY: token checked for is_expired() and used=False; marked used after reset.
     """
-    token_str = request.data.get('token', '').strip()
-    password  = request.data.get('password', '')
+    permission_classes = [AllowAny]
 
-    if not token_str or not password:
-        return Response({'error': 'Token and password are required'}, status=status.HTTP_400_BAD_REQUEST)
+    def post(self, request):
+        token_str = request.data.get('token', '').strip()
+        password  = request.data.get('password', '')
 
-    if len(password) < 8:
-        return Response({'error': 'Password must be at least 8 characters'}, status=status.HTTP_400_BAD_REQUEST)
+        if not token_str or not password:
+            return Response({'error': 'Token and password are required'}, status=status.HTTP_400_BAD_REQUEST)
 
-    try:
-        token = PasswordResetToken.objects.select_related('user').get(token=token_str, used=False)
-    except PasswordResetToken.DoesNotExist:
-        return Response({'error': 'Invalid or expired reset link'}, status=status.HTTP_400_BAD_REQUEST)
+        if len(password) < 8:
+            return Response({'error': 'Password must be at least 8 characters'}, status=status.HTTP_400_BAD_REQUEST)
 
-    if token.is_expired():
-        return Response({'error': 'This link has expired. Please request a new one.'}, status=status.HTTP_400_BAD_REQUEST)
+        try:
+            token = PasswordResetToken.objects.select_related('user').get(token=token_str, used=False)
+        except PasswordResetToken.DoesNotExist:
+            return Response({'error': 'Invalid or expired reset link'}, status=status.HTTP_400_BAD_REQUEST)
 
-    user = token.user
-    user.set_password(password)
-    user.save()
-    token.used = True
-    token.save()
+        if token.is_expired():
+            return Response({'error': 'This link has expired. Please request a new one.'}, status=status.HTTP_400_BAD_REQUEST)
 
-    return Response({'message': 'Password reset successfully. You can now log in with your new password.'})
+        user = token.user
+        user.set_password(password)
+        user.save()
+        token.used = True
+        token.save()
+
+        return Response({'message': 'Password reset successfully. You can now log in with your new password.'})
 
 
 # ============================================================================

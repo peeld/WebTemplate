@@ -8,11 +8,11 @@
  * Login/Logout conditionally based on AuthContext state, not nav list entries.
  */
 
-import Login          from './modules/auth/pages/Login'
-import Signup         from './modules/auth/pages/Signup'
-import ForgotPassword from './modules/auth/pages/ForgotPassword'
-import ResetPassword  from './modules/auth/pages/ResetPassword'
-import VerifyEmail    from './modules/auth/pages/VerifyEmail'
+import Login          from './pages/Login'
+import Signup         from './pages/Signup'
+import ForgotPassword from './pages/ForgotPassword'
+import ResetPassword  from './pages/ResetPassword'
+import VerifyEmail    from './pages/VerifyEmail'
 
 export const routes = [
   { path: '/login',                  element: <Login /> },
