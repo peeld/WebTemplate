@@ -1,5 +1,7 @@
 done/
 log.txt
+core/backend/db.sqlite3
+core/backend/*/
 
 # Python
 __pycache__/

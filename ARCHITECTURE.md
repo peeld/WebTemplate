@@ -10,7 +10,7 @@ A modular Django + React + Bulma scaffolding for internal web applications. Modu
 - **Core is the only glue.** Inter-module dependencies are declared in `module.json` and resolved by `core`. Modules never import from each other directly.
 - **Convention over configuration.** `install.py` manages everything — symlinks, manifests, migrations. Follow the conventions and it works.
 - **Each module is a git repo.** Modules live as git submodules under `modules/`. This makes versioning, sharing, and swapping modules straightforward.
-
+  (this has not be done yet but is the plan)
 ---
 
 ## Repository Layout

@@ -97,7 +97,8 @@ class GoogleRegister(APIView):
                 headers={'Authorization': f'Bearer {access_token}'},
                 timeout=5,
             )
-        except http_requests.RequestException:
+        except http_requests.RequestException as e:
+            logger.warning('Google token verification request failed: %s', e)
             return Response({'error': 'Failed to verify Google token'}, status=status.HTTP_400_BAD_REQUEST)
 
         if google_response.status_code != 200:
@@ -105,7 +106,8 @@ class GoogleRegister(APIView):
 
         try:
             google_data = google_response.json()
-        except Exception:
+        except Exception as e:
+            logger.error('Unexpected error parsing Google userinfo response: %s', e, exc_info=True)
             return Response({'error': 'Invalid Google response'}, status=status.HTTP_400_BAD_REQUEST)
 
         email = google_data.get('email', '').lower().strip()
@@ -354,8 +356,9 @@ class ResendVerificationView(APIView):
 
         try:
             send_verification_email(user, token.token, token.code)
-        except Exception:
-            pass  # Non-fatal; silent failure
+        except Exception as e:
+            # Non-fatal — user can request another resend
+            logger.warning('Failed to resend verification email to user %s: %s', user.id, e, exc_info=True)
 
         return Response({
             'message': 'If that email exists and is not yet verified, we have sent a new verification link.'
@@ -382,7 +385,10 @@ class ForgotPasswordView(APIView):
             user = User.objects.get(email__iexact=email, is_active=True)
             PasswordResetToken.objects.filter(user=user, used=False).update(used=True)
             token = PasswordResetToken.objects.create(user=user)
-            send_password_reset(user, token.token)
+            try:
+                send_password_reset(user, token.token)
+            except Exception as e:
+                logger.warning('Failed to send password reset email to user %s: %s', user.id, e, exc_info=True)
         except User.DoesNotExist:
             pass  # Don't reveal whether email exists
 
@@ -474,7 +480,7 @@ def verify_recaptcha(token, action='register', min_score=0.5):
     except (ValueError, KeyError):
         return False, 'Invalid response from reCAPTCHA service'
     except Exception as e:
-        logger.error('Unexpected reCAPTCHA error: %s: %s', type(e).__name__, e)
+        logger.error('Unexpected reCAPTCHA error: %s: %s', type(e).__name__, e, exc_info=True)
         return False, 'Unexpected error during reCAPTCHA verification'
 
     if is_enterprise:

@@ -87,7 +87,7 @@ import {
 import { onUnauthorized } from '@core/frontend/utils/api'
 import { authApi } from '../api'
 import {
-  setUser, clearUser,
+  setUser as setSentryUser, clearUser,
   captureError, captureWarning, addBreadcrumb,
 } from '@core/frontend/utils/logger'
 
@@ -296,6 +296,7 @@ export function AuthProvider({ children }) {
     if (userId !== null) localStorage.setItem('user_id', String(userId))
 
     const nextUser = { id: userId, username, token }
+    setSentryUser({ id: userId, username })
     setUser(nextUser)
     scheduleRefresh(expiresIn)
 

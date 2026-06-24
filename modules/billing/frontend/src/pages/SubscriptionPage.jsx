@@ -1,13 +1,17 @@
 import { useEffect, useState } from 'react';
 import { Link } from 'react-router-dom';
+import { addBreadcrumb } from '@core/frontend/utils/logger';
 import { getSubscription, openPortal } from '../api.js';
 
 const STATUS_COLOR = {
-  active:     'is-success',
-  trialing:   'is-info',
-  past_due:   'is-warning',
-  canceled:   'is-danger',
-  incomplete: 'is-warning',
+  active:             'is-success',
+  trialing:           'is-info',
+  past_due:           'is-warning',
+  canceled:           'is-danger',
+  incomplete:         'is-warning',
+  unpaid:             'is-danger',
+  paused:             'is-warning',
+  incomplete_expired: 'is-danger',
 };
 
 export default function SubscriptionPage() {
@@ -17,14 +21,30 @@ export default function SubscriptionPage() {
   const [opening, setOpening]   = useState(false);
 
   useEffect(() => {
-    getSubscription()
-      .then(res => res.json())
-      .then(data => setSub(data))
-      .catch(() => setError('Failed to load subscription.'))
-      .finally(() => setLoading(false));
+    async function load() {
+      try {
+        const res = await getSubscription();
+        if (res.status === 401) {
+          setError('Please log in to view your subscription.');
+          return;
+        }
+        const data = await res.json();
+        if (!res.ok) {
+          setError(data.detail || data.error || 'Failed to load subscription.');
+          return;
+        }
+        setSub(data);
+      } catch {
+        setError('Failed to load subscription.');
+      } finally {
+        setLoading(false);
+      }
+    }
+    load();
   }, []);
 
   async function handlePortal() {
+    addBreadcrumb('billing portal opened', {}, 'info');
     setOpening(true);
     try {
       const res  = await openPortal();

@@ -15,12 +15,6 @@ from django.core.mail import EmailMultiAlternatives
 from django.conf import settings
 from django.core.exceptions import ImproperlyConfigured
 
-try:
-    import sentry_sdk
-    SENTRY_AVAILABLE = True
-except ImportError:
-    SENTRY_AVAILABLE = False
-
 logger = logging.getLogger(__name__)
 
 FRONTEND_URL = getattr(settings, 'FRONTEND_URL', 'http://localhost:5173')
@@ -119,25 +113,20 @@ def send_email(to, subject, text_body, html_body):
         return result
 
     except ImproperlyConfigured as e:
-        logger.critical(f'Email configuration error: {e}', exc_info=True)
-        if SENTRY_AVAILABLE:
-            sentry_sdk.capture_exception(e)
+        logger.critical('Email configuration error: %s', e, exc_info=True)
         raise
 
     except ValueError as e:
-        logger.warning(f'Invalid email recipient: {e}', exc_info=True)
-        if SENTRY_AVAILABLE:
-            sentry_sdk.capture_exception(e)
+        logger.warning('Invalid email recipient: %s', e, exc_info=True)
         raise
 
     except Exception as e:
         logger.error(
-            f'Failed to send email: {e}',
+            'Failed to send email: %s',
+            e,
             extra={'subject': subject, 'recipients': to, 'error_type': type(e).__name__},
             exc_info=True,
         )
-        if SENTRY_AVAILABLE:
-            sentry_sdk.capture_exception(e)
         raise
 
 
@@ -210,19 +199,16 @@ def send_verification_email(user, token, code):
         logger.debug('Verification email queued', extra={'user_id': user.id, 'token_prefix': token_prefix})
 
     except ValueError as e:
-        logger.warning(f'Cannot send verification email: {e}', extra={'user_id': getattr(user, 'id', None)})
-        if SENTRY_AVAILABLE:
-            sentry_sdk.capture_message(f'Verification email failed: {e}', level='warning')
+        logger.warning('Cannot send verification email: %s', e, extra={'user_id': getattr(user, 'id', None)})
         raise
 
     except Exception as e:
         logger.error(
-            f'Unexpected error sending verification email to user {getattr(user, "id", "unknown")}',
+            'Unexpected error sending verification email to user %s',
+            getattr(user, 'id', 'unknown'),
             extra={'email': getattr(user, 'email', 'unknown')},
             exc_info=True,
         )
-        if SENTRY_AVAILABLE:
-            sentry_sdk.capture_exception(e)
         raise
 
 
@@ -289,17 +275,14 @@ def send_password_reset(user, token):
         logger.debug('Password reset email queued', extra={'user_id': user.id, 'token_prefix': token_prefix})
 
     except ValueError as e:
-        logger.warning(f'Cannot send password reset email: {e}', extra={'user_id': getattr(user, 'id', None)})
-        if SENTRY_AVAILABLE:
-            sentry_sdk.capture_message(f'Password reset email failed: {e}', level='warning')
+        logger.warning('Cannot send password reset email: %s', e, extra={'user_id': getattr(user, 'id', None)})
         raise
 
     except Exception as e:
         logger.error(
-            f'Unexpected error sending password reset email to user {getattr(user, "id", "unknown")}',
+            'Unexpected error sending password reset email to user %s',
+            getattr(user, 'id', 'unknown'),
             extra={'email': getattr(user, 'email', 'unknown')},
             exc_info=True,
         )
-        if SENTRY_AVAILABLE:
-            sentry_sdk.capture_exception(e)
         raise

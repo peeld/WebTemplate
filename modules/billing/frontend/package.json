@@ -3,5 +3,8 @@
   "version": "1.0.0",
   "type": "module",
   "main": "src/index.js",
-  "dependencies": {}
+  "dependencies": {
+    "@stripe/stripe-js": "^4.0.0",
+    "@stripe/react-stripe-js": "^2.0.0"
+  }
 }
