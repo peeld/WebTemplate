@@ -1,4 +1,6 @@
 import { CartProvider } from './context/CartContext.jsx';
+import BillingUserSection from './pages/BillingUserSection.jsx';
+import FeaturedProducts from './pages/FeaturedProducts.jsx';
 
 export { routes, navItems } from './routes.jsx';
 
@@ -15,3 +17,7 @@ export const adminCards = [
     ],
   },
 ];
+
+export const userSections = [BillingUserSection];
+
+export const homeSections = [FeaturedProducts];

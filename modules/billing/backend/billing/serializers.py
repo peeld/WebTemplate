@@ -34,18 +34,25 @@ class ProductSerializer(serializers.ModelSerializer):
 
 
 class SubscriptionSerializer(serializers.ModelSerializer):
+    product_name = serializers.SerializerMethodField()
+
     class Meta:
         model  = Subscription
         fields = [
             'stripe_subscription_id',
             'stripe_price_id',
             'stripe_product_id',
+            'product_name',
             'status',
             'current_period_end',
             'cancel_at_period_end',
             'updated_at',
         ]
         read_only_fields = fields
+
+    def get_product_name(self, obj):
+        product = Product.objects.filter(stripe_product_id=obj.stripe_product_id).first()
+        return product.name if product else None
 
 
 class AdminProductPriceSerializer(serializers.ModelSerializer):

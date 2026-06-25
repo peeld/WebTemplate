@@ -83,8 +83,9 @@ modules/auth/
 │   └── src/
 │       ├── routes.jsx           Exported route definitions (path + component)
 │       ├── components/          Internal components
+│       ├── pages/               Page-level components (routed and section components)
 │       ├── api.js               All API calls for this module
-│       └── index.js             Public exports: routes, navItems, providers, components
+│       └── index.js             Public exports: routes, navItems, providers, adminCards, userSections, components
 │   └── package.json             name: "@modules/auth"
 └── module.json                  Module manifest
 ```
@@ -154,14 +155,50 @@ Declares everything `install.py` needs to know.
 
 ### Frontend
 
-`install.py` regenerates `core/frontend/src/modules.js` after any module change. It collects four arrays from every installed module:
+`install.py` regenerates `core/frontend/src/modules.js` after any module change. It collects five arrays from every installed module:
 
 - `moduleRoutes` — React Router route definitions, merged into `App.jsx`.
 - `moduleNavItems` — Navbar links.
 - `moduleProviders` — Provider components (e.g. `AuthProvider`, `GoogleProvider`) wrapped around the app tree in `main.jsx` via `ModuleProviders`.
 - `moduleNavbarEnd` — Components rendered in the right slot of the Navbar.
+- `moduleAdminCards` — Cards rendered on the `/admin` page (title, description, links).
+- `moduleUserSections` — React components rendered as cards on the `/dashboard` user homepage.
 
 `modules.js` is a generated file — never edit it by hand. It should be committed after any install/uninstall so the repo reflects the current module set.
+
+---
+
+## Site Structure
+
+Core owns these top-level routes. All other routes come from modules.
+
+| Route | Component | Purpose |
+|---|---|---|
+| `/` | `HomePage` | Public landing page |
+| `/dashboard` | `UserPage` | Authenticated user homepage — renders `moduleUserSections` |
+| `/admin` | `AdminPage` | Admin panel — renders `moduleAdminCards` |
+| `*` | `NotFoundPage` | 404 fallback |
+
+### User Homepage (`/dashboard`)
+
+The user homepage is a plugin surface — each module can contribute one or more section components by exporting a `userSections` array from its `index.js`:
+
+```js
+// modules/mymodule/frontend/src/index.js
+import MySection from './pages/MySection.jsx';
+export const userSections = [MySection];
+```
+
+Each section is a plain React component (no props) rendered in a two-column card grid. Sections access their own module's context (e.g. `useAuth()`, billing state) directly — `UserPage` passes no props. If a section requires authentication and the user is not logged in, the section itself is responsible for showing an appropriate message or redirect.
+
+**Built-in sections:**
+
+- `userauth` — Displays username, links to reset password, and a logout button.
+- `billing` — Displays subscription status (active/trialing/past_due/etc.), renewal date, and a "Manage Billing" portal button; links to the pricing page.
+
+### Admin Page (`/admin`)
+
+Modules contribute cards via `adminCards` in their `index.js`. Each card has a `title`, optional `description`, and an array of `links` (`{ label, to }`).
 
 ---
 

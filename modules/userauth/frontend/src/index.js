@@ -37,3 +37,9 @@ export { default as GoogleProvider } from './context/GoogleProvider'
 import { AuthProvider } from './context/AuthContext'
 import GoogleProvider   from './context/GoogleProvider'
 export const providers = [GoogleProvider, AuthProvider]
+
+import NavbarEndComponent from './components/NavbarEnd'
+export const navbarEnd = [NavbarEndComponent]
+
+import AccountSection from './pages/AccountSection'
+export const userSections = [AccountSection]

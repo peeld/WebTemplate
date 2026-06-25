@@ -18,6 +18,12 @@ export const createCheckoutSession = (priceId, mode = 'subscription') =>
 export const getSubscription = () =>
   get('/api/billing/subscription/');
 
+export const cancelSubscription = () =>
+  post('/api/billing/subscription/cancel/', {});
+
+export const resumeSubscription = () =>
+  post('/api/billing/subscription/resume/', {});
+
 export const openPortal = () =>
   post('/api/billing/portal/', {});
 
@@ -35,6 +41,12 @@ export const adminDeleteProduct = (id) =>
 
 export const adminGetSubscriptions = () =>
   get('/api/billing/admin/subscriptions/');
+
+export const adminCheckSubscriptionSync = () =>
+  get('/api/billing/admin/subscriptions/sync/');
+
+export const adminFixSubscriptionSync = () =>
+  post('/api/billing/admin/subscriptions/sync/', {});
 
 export const adminSyncProduct = (productId) =>
   post(`/api/billing/admin/products/${productId}/sync/`, {});
@@ -57,8 +69,12 @@ export const adminUploadProductImage = (productId, formData) =>
 export const adminDeleteProductImage = (productId, imageId) =>
   del(`/api/billing/admin/products/${productId}/images/${imageId}/`);
 
-export const createSetupIntent = () =>
-  post('/api/billing/cart/setup-intent/', {});
+export const createSetupIntent = (email = null) =>
+  post('/api/billing/cart/setup-intent/', email ? { email } : {});
 
-export const executeCart = (paymentMethod, items) =>
-  post('/api/billing/cart/execute/', { payment_method: paymentMethod, items });
+export const executeCart = (paymentMethod, items, setupIntentId = null) =>
+  post('/api/billing/cart/execute/', {
+    payment_method: paymentMethod,
+    items,
+    ...(setupIntentId ? { setup_intent_id: setupIntentId } : {}),
+  });

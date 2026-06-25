@@ -1,5 +1,6 @@
 import logging
 import os
+from datetime import datetime, timezone as dt_utc, timedelta
 
 import stripe
 from django.conf import settings
@@ -22,6 +23,84 @@ logger = logging.getLogger(__name__)
 def _stripe_client():
     stripe.api_key = settings.STRIPE_SECRET_KEY
     return stripe
+
+
+def _resolve_period_end(sub_dict):
+    """
+    Return the subscription period-end as a timezone-aware datetime.
+
+    Newer Stripe API versions (with billing_mode) omit current_period_end.
+    Fallback order: current_period_end → trial_end (if trialing) →
+    next billing date computed from billing_cycle_anchor + price interval.
+    """
+    ts = sub_dict.get('current_period_end')
+    if ts:
+        return datetime.fromtimestamp(ts, tz=dt_utc.utc)
+
+    if sub_dict.get('status') == 'trialing':
+        ts = sub_dict.get('trial_end')
+        if ts:
+            return datetime.fromtimestamp(ts, tz=dt_utc.utc)
+
+    anchor_ts = sub_dict.get('billing_cycle_anchor')
+    if not anchor_ts:
+        raise ValueError(
+            f'Cannot determine period end (no current_period_end, trial_end, or billing_cycle_anchor). '
+            f'Fields present: {list(sub_dict.keys())}'
+        )
+
+    # Determine billing interval from items → plan (deprecated but reliable) or price.recurring
+    interval       = 'month'
+    interval_count = 1
+    items_data = sub_dict.get('items', {}).get('data', [])
+    if items_data:
+        plan = items_data[0].get('plan') or {}
+        if plan.get('interval'):
+            interval       = plan['interval']
+            interval_count = int(plan.get('interval_count', 1))
+        else:
+            recurring = (items_data[0].get('price') or {}).get('recurring') or {}
+            if recurring.get('interval'):
+                interval       = recurring['interval']
+                interval_count = int(recurring.get('interval_count', 1))
+
+    # Advance billing_cycle_anchor by one interval at a time until it's in the future.
+    APPROX_DAYS = {'day': 1, 'week': 7, 'month': 31, 'year': 366}
+    delta  = timedelta(days=APPROX_DAYS.get(interval, 31) * interval_count)
+    anchor = datetime.fromtimestamp(anchor_ts, tz=dt_utc.utc)
+    now    = timezone.now()
+    while anchor <= now:
+        anchor += delta
+    return anchor
+
+
+def _upsert_subscription_from_stripe(sc, stripe_sub):
+    """Write or update a local Subscription from a fully-retrieved Stripe Subscription object."""
+    raw = stripe_sub.to_dict()
+
+    items_data = raw.get('items', {}).get('data', [])
+    if not items_data:
+        raise ValueError(f'No items in subscription {raw.get("id")}')
+
+    price_raw  = items_data[0].get('price', {})
+    price_id   = price_raw.get('id')
+    product_id = price_raw.get('product')
+    if isinstance(product_id, dict):
+        product_id = product_id.get('id')
+
+    period_end = _resolve_period_end(raw)
+
+    Subscription.objects.update_or_create(
+        customer=sc,
+        defaults={
+            'stripe_subscription_id': raw['id'],
+            'stripe_price_id':        price_id,
+            'stripe_product_id':      product_id,
+            'status':                 raw['status'],
+            'current_period_end':     period_end,
+            'cancel_at_period_end':   raw.get('cancel_at_period_end', False),
+        },
+    )
 
 
 def _get_or_create_stripe_customer(user, client):
@@ -166,38 +245,111 @@ class PortalView(APIView):
         return Response({'url': session.url})
 
 
-class CartSetupIntentView(APIView):
-    """Create a Stripe SetupIntent so the frontend can collect and save a payment method."""
+class CancelSubscriptionView(APIView):
+    """Cancel the user's subscription at period end."""
     permission_classes = [IsAuthenticated]
 
     def post(self, request):
+        try:
+            subscription = request.user.stripe_customer.subscription
+        except (StripeCustomer.DoesNotExist, Subscription.DoesNotExist):
+            return Response({'error': 'No active subscription found.'}, status=404)
+
+        if subscription.cancel_at_period_end:
+            return Response({'error': 'Subscription is already set to cancel.'}, status=400)
+
         client = _stripe_client()
         try:
-            _sc, customer_id = _get_or_create_stripe_customer(request.user, client)
-        except stripe.StripeError as e:
-            logger.error('CartSetupIntent: customer create failed for user %s: %s', request.user.pk, e, exc_info=True)
-            return Response({'error': 'Unable to create billing account.'}, status=502)
-
-        try:
-            setup_intent = client.SetupIntent.create(
-                customer=customer_id,
-                usage='off_session',
+            client.Subscription.modify(
+                subscription.stripe_subscription_id,
+                cancel_at_period_end=True,
             )
         except stripe.StripeError as e:
-            logger.error('CartSetupIntent: SetupIntent create failed for user %s: %s', request.user.pk, e, exc_info=True)
+            logger.error('Failed to cancel subscription for user %s: %s', request.user.pk, e, exc_info=True)
+            return Response({'error': 'Unable to cancel subscription.'}, status=502)
+
+        subscription.cancel_at_period_end = True
+        subscription.save(update_fields=['cancel_at_period_end', 'updated_at'])
+        logger.info('Subscription %s set to cancel at period end for user %s', subscription.stripe_subscription_id, request.user.pk)
+        return Response(SubscriptionSerializer(subscription).data)
+
+
+class ResumeSubscriptionView(APIView):
+    """Undo a pending cancellation."""
+    permission_classes = [IsAuthenticated]
+
+    def post(self, request):
+        try:
+            subscription = request.user.stripe_customer.subscription
+        except (StripeCustomer.DoesNotExist, Subscription.DoesNotExist):
+            return Response({'error': 'No subscription found.'}, status=404)
+
+        if not subscription.cancel_at_period_end:
+            return Response({'error': 'Subscription is not scheduled to cancel.'}, status=400)
+
+        client = _stripe_client()
+        try:
+            client.Subscription.modify(
+                subscription.stripe_subscription_id,
+                cancel_at_period_end=False,
+            )
+        except stripe.StripeError as e:
+            logger.error('Failed to resume subscription for user %s: %s', request.user.pk, e, exc_info=True)
+            return Response({'error': 'Unable to resume subscription.'}, status=502)
+
+        subscription.cancel_at_period_end = False
+        subscription.save(update_fields=['cancel_at_period_end', 'updated_at'])
+        logger.info('Subscription %s resumption confirmed for user %s', subscription.stripe_subscription_id, request.user.pk)
+        return Response(SubscriptionSerializer(subscription).data)
+
+
+class CartSetupIntentView(APIView):
+    """Create a Stripe SetupIntent so the frontend can collect and save a payment method."""
+    permission_classes = [AllowAny]
+
+    def post(self, request):
+        client = _stripe_client()
+
+        if request.user.is_authenticated:
+            try:
+                _sc, customer_id = _get_or_create_stripe_customer(request.user, client)
+            except stripe.StripeError as e:
+                logger.error('CartSetupIntent: customer create failed for user %s: %s', request.user.pk, e, exc_info=True)
+                return Response({'error': 'Unable to create billing account.'}, status=502)
+
+            try:
+                setup_intent = client.SetupIntent.create(customer=customer_id, usage='off_session')
+            except stripe.StripeError as e:
+                logger.error('CartSetupIntent: SetupIntent create failed for user %s: %s', request.user.pk, e, exc_info=True)
+                return Response({'error': 'Unable to initialize checkout.'}, status=502)
+
+            logger.info('SetupIntent %s created for user %s', setup_intent.id, request.user.pk)
+            return Response({'client_secret': setup_intent.client_secret, 'customer_id': customer_id})
+
+        # Guest flow — one-time items only; no DB record created
+        email = (request.data.get('email') or '').strip()
+        if not email:
+            return Response({'error': 'Email is required for guest checkout.'}, status=400)
+
+        try:
+            customer = client.Customer.create(email=email, metadata={'guest': 'true'})
+            setup_intent = client.SetupIntent.create(customer=customer.id, usage='off_session')
+        except stripe.StripeError as e:
+            logger.error('CartSetupIntent: guest setup failed for %s: %s', email, e, exc_info=True)
             return Response({'error': 'Unable to initialize checkout.'}, status=502)
 
-        logger.info('SetupIntent %s created for user %s', setup_intent.id, request.user.pk)
-        return Response({'client_secret': setup_intent.client_secret, 'customer_id': customer_id})
+        logger.info('Guest SetupIntent %s created for email %s', setup_intent.id, email)
+        return Response({'client_secret': setup_intent.client_secret, 'setup_intent_id': setup_intent.id})
 
 
 class CartExecuteView(APIView):
     """Execute a cart by creating PaymentIntent(s) and Subscription(s) from a saved payment method."""
-    permission_classes = [IsAuthenticated]
+    permission_classes = [AllowAny]
 
     def post(self, request):
-        payment_method = request.data.get('payment_method')
-        items_data     = request.data.get('items', [])
+        payment_method  = request.data.get('payment_method')
+        items_data      = request.data.get('items', [])
+        setup_intent_id = request.data.get('setup_intent_id')  # guests only
 
         if not payment_method:
             return Response({'error': 'payment_method is required.'}, status=400)
@@ -216,12 +368,40 @@ class CartExecuteView(APIView):
         if missing:
             return Response({'error': f'Invalid or inactive price IDs: {missing}'}, status=400)
 
-        try:
-            customer_id = request.user.stripe_customer.stripe_customer_id
-        except StripeCustomer.DoesNotExist:
-            return Response({'error': 'No billing account found. Please restart checkout.'}, status=400)
-
         client = _stripe_client()
+
+        sc = None
+        if request.user.is_authenticated:
+            try:
+                sc          = request.user.stripe_customer
+                customer_id = sc.stripe_customer_id
+            except StripeCustomer.DoesNotExist:
+                return Response({'error': 'No billing account found. Please restart checkout.'}, status=400)
+        else:
+            # Guest: subscriptions are not supported
+            has_recurring = any(
+                prices[item['price_id']].price_type == 'recurring'
+                for item in items_data
+                if item['price_id'] in prices
+            )
+            if has_recurring:
+                return Response(
+                    {'error': 'Subscriptions require an account. Please log in or sign up.'},
+                    status=403,
+                )
+            if not setup_intent_id:
+                return Response({'error': 'setup_intent_id is required for guest checkout.'}, status=400)
+            try:
+                setup_intent = client.SetupIntent.retrieve(setup_intent_id)
+                customer_id  = setup_intent.customer
+                if not customer_id:
+                    return Response({'error': 'Invalid checkout session. Please restart.'}, status=400)
+                customer = client.Customer.retrieve(customer_id)
+                if customer.get('metadata', {}).get('guest') != 'true':
+                    return Response({'error': 'Invalid checkout session. Please restart.'}, status=400)
+            except stripe.StripeError as e:
+                logger.error('CartExecute: guest SetupIntent retrieval failed: %s', e, exc_info=True)
+                return Response({'error': 'Invalid checkout session. Please restart.'}, status=400)
 
         try:
             client.Customer.modify(
@@ -283,6 +463,13 @@ class CartExecuteView(APIView):
                 )
                 transaction_count += 1
                 logger.info('Subscription %s created for user %s (interval=%s)', sub.id, request.user.pk, interval)
+                if sc is not None:
+                    try:
+                        full = client.Subscription.retrieve(sub.id, expand=['items.data.price'])
+                        _upsert_subscription_from_stripe(sc, full)
+                        logger.info('Subscription %s mirrored to local DB for user %s', sub.id, request.user.pk)
+                    except Exception as e:
+                        logger.error('CartExecute: failed to mirror subscription %s to local DB: %s', sub.id, e, exc_info=True)
             except stripe.StripeError as e:
                 errors.append({'type': 'subscription', 'interval': interval, 'error': str(e)})
                 logger.error('CartExecute: Subscription create failed for user %s interval=%s: %s', request.user.pk, interval, e, exc_info=True)
@@ -371,9 +558,11 @@ class WebhookView(APIView):
             logger.warning('subscription upsert: no StripeCustomer for %s', sub.get('customer'))
             return
 
-        period_end = timezone.datetime.fromtimestamp(
-            sub['current_period_end'], tz=timezone.utc
-        )
+        try:
+            period_end = _resolve_period_end(sub)
+        except ValueError as e:
+            logger.error('subscription upsert: %s for subscription %s', e, sub.get('id'))
+            return
         try:
             price_id   = sub['items']['data'][0]['price']['id']
             product_id = sub['items']['data'][0]['price']['product']
@@ -486,6 +675,189 @@ class AdminSubscriptionListView(APIView):
     def get(self, request):
         subs = Subscription.objects.select_related('customer__user').all().order_by('-updated_at')
         return Response(AdminSubscriptionSerializer(subs, many=True).data)
+
+
+class AdminSubscriptionSyncView(APIView):
+    """Check and fix sync state between Stripe subscriptions and the local DB."""
+    permission_classes = [IsAdminUser]
+
+    def _fetch_all_stripe_subs(self, client):
+        """Return dict stripe_sub_id -> stripe_sub for every subscription in Stripe."""
+        subs = {}
+        params = {'limit': 100, 'status': 'all'}
+        while True:
+            page = client.Subscription.list(**params)
+            for sub in page.data:
+                subs[sub['id']] = sub
+            if not page.has_more:
+                break
+            params['starting_after'] = page.data[-1].id
+        return subs
+
+    def _build_issues(self, stripe_subs, local_customers):
+        """Compare Stripe subscriptions against local DB records and return issue list."""
+        stripe_by_customer = {}
+        for sub in stripe_subs.values():
+            cid = sub['customer'] if isinstance(sub['customer'], str) else sub['customer']['id']
+            stripe_by_customer.setdefault(cid, []).append(sub)
+
+        issues = []
+        for sc in local_customers:
+            customer_stripe = stripe_by_customer.get(sc.stripe_customer_id, [])
+            active_stripe   = [s for s in customer_stripe if s['status'] not in ('canceled', 'incomplete_expired')]
+
+            try:
+                local_sub = sc.subscription
+                has_local = True
+            except Subscription.DoesNotExist:
+                has_local = False
+                local_sub = None
+
+            if has_local:
+                stripe_match = stripe_subs.get(local_sub.stripe_subscription_id)
+                if stripe_match is None:
+                    issues.append({
+                        'type': 'orphaned',
+                        'description': 'Local record exists but subscription not found in Stripe — will be marked canceled.',
+                        'user_email': sc.user.email,
+                        'stripe_subscription_id': local_sub.stripe_subscription_id,
+                        'local_status': local_sub.status,
+                        'stripe_status': None,
+                    })
+                elif stripe_match['status'] != local_sub.status:
+                    issues.append({
+                        'type': 'status_mismatch',
+                        'description': f'Status differs: local={local_sub.status}, Stripe={stripe_match["status"]}.',
+                        'user_email': sc.user.email,
+                        'stripe_subscription_id': local_sub.stripe_subscription_id,
+                        'local_status': local_sub.status,
+                        'stripe_status': stripe_match['status'],
+                    })
+                for s in active_stripe:
+                    if s['id'] != local_sub.stripe_subscription_id:
+                        issues.append({
+                            'type': 'untracked',
+                            'description': 'Active Stripe subscription not tracked locally.',
+                            'user_email': sc.user.email,
+                            'stripe_subscription_id': s['id'],
+                            'local_status': None,
+                            'stripe_status': s['status'],
+                        })
+            else:
+                for s in active_stripe:
+                    issues.append({
+                        'type': 'missing_local',
+                        'description': 'Active Stripe subscription has no local DB record.',
+                        'user_email': sc.user.email,
+                        'stripe_subscription_id': s['id'],
+                        'local_status': None,
+                        'stripe_status': s['status'],
+                    })
+
+        return issues
+
+    def get(self, request):
+        client = _stripe_client()
+        try:
+            stripe_subs = self._fetch_all_stripe_subs(client)
+        except stripe.StripeError as e:
+            logger.error('AdminSubscriptionSync GET: Stripe fetch failed: %s', e, exc_info=True)
+            return Response({'error': 'Unable to fetch subscriptions from Stripe.'}, status=502)
+
+        local_customers = StripeCustomer.objects.select_related('user', 'subscription').all()
+        issues = self._build_issues(stripe_subs, local_customers)
+
+        return Response({
+            'issues': issues,
+            'stripe_total': len(stripe_subs),
+            'local_total': Subscription.objects.count(),
+        })
+
+    def post(self, request):
+        client = _stripe_client()
+        try:
+            stripe_subs = self._fetch_all_stripe_subs(client)
+        except stripe.StripeError as e:
+            logger.error('AdminSubscriptionSync POST: Stripe fetch failed: %s', e, exc_info=True)
+            return Response({'error': 'Unable to fetch subscriptions from Stripe.'}, status=502)
+
+        stripe_by_customer = {}
+        for sub in stripe_subs.values():
+            cid = sub['customer'] if isinstance(sub['customer'], str) else sub['customer']['id']
+            stripe_by_customer.setdefault(cid, []).append(sub)
+
+        local_customers = StripeCustomer.objects.select_related('user', 'subscription').all()
+        fixed      = 0
+        fix_errors = []
+        debug_rows = []
+
+        for sc in local_customers:
+            customer_stripe = stripe_by_customer.get(sc.stripe_customer_id, [])
+            active_stripe   = [s for s in customer_stripe if s['status'] not in ('canceled', 'incomplete_expired')]
+
+            try:
+                local_sub = sc.subscription
+                has_local = True
+            except Subscription.DoesNotExist:
+                has_local = False
+                local_sub = None
+
+            row = {
+                'stripe_customer_id': sc.stripe_customer_id,
+                'user_email': sc.user.email,
+                'stripe_subs_for_customer': len(customer_stripe),
+                'active_stripe_subs': len(active_stripe),
+                'has_local': has_local,
+                'action': 'none',
+            }
+
+            if has_local:
+                stripe_match = stripe_subs.get(local_sub.stripe_subscription_id)
+                if stripe_match is None:
+                    local_sub.status = 'canceled'
+                    local_sub.save(update_fields=['status', 'updated_at'])
+                    fixed += 1
+                    row['action'] = 'marked_canceled'
+                    logger.info('AdminSubscriptionSync: marked orphaned sub %s as canceled for user %s', local_sub.stripe_subscription_id, sc.user.pk)
+                elif stripe_match['status'] != local_sub.status:
+                    try:
+                        full = client.Subscription.retrieve(
+                            local_sub.stripe_subscription_id,
+                            expand=['items.data.price'],
+                        )
+                        _upsert_subscription_from_stripe(sc, full)
+                        fixed += 1
+                        row['action'] = 'status_updated'
+                        logger.info('AdminSubscriptionSync: updated sub %s for user %s', local_sub.stripe_subscription_id, sc.user.pk)
+                    except Exception as e:
+                        fix_errors.append({'subscription': local_sub.stripe_subscription_id, 'error': str(e)})
+                        row['action'] = f'error: {e}'
+                        logger.error('AdminSubscriptionSync: update failed for sub %s: %s', local_sub.stripe_subscription_id, e, exc_info=True)
+                else:
+                    row['action'] = f'no_change (local={local_sub.status} matches stripe)'
+            else:
+                if active_stripe:
+                    try:
+                        candidate_id = active_stripe[0]['id']
+                        row['candidate_id'] = candidate_id
+                        full = client.Subscription.retrieve(
+                            candidate_id,
+                            expand=['items.data.price'],
+                        )
+                        _upsert_subscription_from_stripe(sc, full)
+                        fixed += 1
+                        row['action'] = 'created'
+                        logger.info('AdminSubscriptionSync: created local record for sub %s user %s', full.id, sc.user.pk)
+                    except Exception as e:
+                        fix_errors.append({'subscription': candidate_id, 'error': str(e)})
+                        row['action'] = f'error: {e}'
+                        logger.error('AdminSubscriptionSync: failed to create record for sub %s: %s', candidate_id, e, exc_info=True)
+                else:
+                    row['action'] = 'no_active_stripe_subs'
+
+            debug_rows.append(row)
+
+        return Response({'fixed': fixed, 'errors': fix_errors, 'debug': debug_rows})
 
 
 def _ensure_stripe_product(product):

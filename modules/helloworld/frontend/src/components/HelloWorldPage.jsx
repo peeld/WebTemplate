@@ -1,26 +1,24 @@
-import { useEffect, useState } from 'react';
-import LoadingSpinner from '@core/frontend/components/LoadingSpinner.jsx';
-import Notification from '@core/frontend/components/Notification.jsx';
-import { get } from '../api.js';
-
-/** Fetches /api/helloworld/ and displays the greeting. End-to-end smoke test. */
 export default function HelloWorldPage() {
-  const [message, setMessage] = useState(null);
-  const [error, setError]     = useState(null);
-
-  useEffect(() => {
-    get('helloworld/')
-      .then(data => setMessage(data.message))
-      .catch(err  => setError(err.message));
-  }, []);
-
   return (
     <section className="section">
       <div className="container">
         <h1 className="title">Hello World</h1>
-        {error   && <Notification color="danger">{error}</Notification>}
-        {message && <p className="subtitle">{message}</p>}
-        {!message && !error && <LoadingSpinner />}
+        <p className="subtitle">This is a page stub from the <strong>helloworld</strong> module.</p>
+
+        <div className="box">
+          <p className="content">
+            Replace this component with your module&rsquo;s actual page content. A few conventions to follow:
+          </p>
+          <ul className="content">
+            <li>Keep all API calls in <code>api.js</code> — no inline <code>fetch</code> in components.</li>
+            <li>Use Bulma classes for layout and styling.</li>
+            <li>Export this page from <code>routes.jsx</code> and list the nav entry in <code>navItems</code>.</li>
+          </ul>
+        </div>
+
+        <div className="notification is-info is-light">
+          This page is registered at <code>/helloworld</code> via <code>routes.jsx</code> and linked in the navbar via <code>navItems</code> in <code>index.js</code>.
+        </div>
       </div>
     </section>
   );

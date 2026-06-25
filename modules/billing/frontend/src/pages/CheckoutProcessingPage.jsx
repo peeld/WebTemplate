@@ -21,6 +21,7 @@ export default function CheckoutProcessingPage() {
 
   async function run() {
     let paymentMethod = location.state?.paymentMethod ?? null;
+    let setupIntentId = location.state?.setupIntentId ?? null;
 
     // Redirect path: Stripe returned setup_intent_client_secret in URL
     if (!paymentMethod) {
@@ -42,6 +43,7 @@ export default function CheckoutProcessingPage() {
             return;
           }
           paymentMethod = setupIntent.payment_method;
+          setupIntentId = setupIntent.id;
         } catch {
           setError('Failed to verify payment setup.');
           return;
@@ -70,7 +72,7 @@ export default function CheckoutProcessingPage() {
     } catch { /* non-fatal */ }
 
     try {
-      const res  = await executeCart(paymentMethod, cartItems);
+      const res  = await executeCart(paymentMethod, cartItems, setupIntentId);
       const data = await res.json();
 
       if (!res.ok) {

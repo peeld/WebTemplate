@@ -101,8 +101,10 @@ class FileUrlView(APIView):
 
     def get(self, request, pk):
         try:
-            upload_file = UploadedFile.objects.get(pk=pk, user=request.user)
+            upload_file = UploadedFile.objects.get(pk=pk)
         except UploadedFile.DoesNotExist:
+            return Response({'error': 'Not found.'}, status=404)
+        if not (upload_file.user == request.user or request.user.is_staff):
             return Response({'error': 'Not found.'}, status=404)
 
         s3     = _s3_client()

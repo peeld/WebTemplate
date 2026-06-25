@@ -1,0 +1,10 @@
+{
+  "name": "support",
+  "version": "0.1.0",
+  "django_app": "support",
+  "npm_package": "@modules/support",
+  "url_prefix": "support",
+  "requires": ["userauth", "fileupload"],
+  "pip_packages": [],
+  "description": "User support ticket system with staff responses and email notifications."
+}

@@ -13,6 +13,8 @@ import {
   adminDeleteProductPrice,
   adminUploadProductImage,
   adminDeleteProductImage,
+  adminCheckSubscriptionSync,
+  adminFixSubscriptionSync,
 } from '../api.js';
 
 const EMPTY_PRODUCT = {
@@ -667,6 +669,10 @@ export default function AdminBillingPage() {
   const [syncingId, setSyncingId]           = useState(null);
   const [editErrors, setEditErrors]         = useState({});
   const [createErrors, setCreateErrors]     = useState({});
+  const [syncReport, setSyncReport]         = useState(null);   // { issues, stripe_total, local_total }
+  const [syncChecking, setSyncChecking]     = useState(false);
+  const [syncFixing, setSyncFixing]         = useState(false);
+  const [syncFixResult, setSyncFixResult]   = useState(null);  // { fixed, errors }
 
   useEffect(() => {
     if (!hasValidToken()) {
@@ -839,6 +845,38 @@ export default function AdminBillingPage() {
       setProducts(prev => prev.map(p => p.id === id ? data : p));
     } catch { setError('Network error.'); }
     finally { setSyncingId(null); }
+  }
+
+  async function checkSync() {
+    setSyncChecking(true);
+    setSyncReport(null);
+    setSyncFixResult(null);
+    try {
+      const res  = await adminCheckSubscriptionSync();
+      const data = await res.json();
+      if (!res.ok) { setError(data.error || 'Sync check failed.'); return; }
+      setSyncReport(data);
+    } catch { setError('Network error during sync check.'); }
+    finally { setSyncChecking(false); }
+  }
+
+  async function fixSync() {
+    setSyncFixing(true);
+    setSyncFixResult(null);
+    try {
+      const res  = await adminFixSubscriptionSync();
+      const data = await res.json();
+      if (!res.ok) { setError(data.error || 'Sync fix failed.'); return; }
+      setSyncFixResult(data);
+      setSyncReport(null);
+      // Refresh subscription list
+      const r = await adminGetSubscriptions();
+      if (r.ok) {
+        const subs = await r.json();
+        if (Array.isArray(subs)) setSubscriptions(subs);
+      }
+    } catch { setError('Network error during sync fix.'); }
+    finally { setSyncFixing(false); }
   }
 
   if (!loadingP && !loadingS && !hasValidToken() && !error) {
@@ -1054,11 +1092,11 @@ export default function AdminBillingPage() {
             {loadingS && <p className="has-text-grey">Loading subscriptions…</p>}
 
             {!loadingS && subscriptions.length === 0 && (
-              <p className="has-text-grey">No subscriptions found.</p>
+              <p className="has-text-grey mb-4">No subscriptions found.</p>
             )}
 
             {!loadingS && subscriptions.length > 0 && (
-              <div className="table-container">
+              <div className="table-container mb-5">
                 <table className="table is-fullwidth is-striped is-hoverable is-size-7">
                   <thead>
                     <tr>
@@ -1090,6 +1128,130 @@ export default function AdminBillingPage() {
                     ))}
                   </tbody>
                 </table>
+              </div>
+            )}
+
+            {!loadingS && (
+              <div className="box">
+                <div className="level is-mobile mb-3">
+                  <div className="level-left">
+                    <div>
+                      <p className="has-text-weight-semibold is-size-6">Stripe Sync</p>
+                      <p className="is-size-7 has-text-grey">Compare local DB against Stripe and fix discrepancies.</p>
+                    </div>
+                  </div>
+                  <div className="level-right">
+                    <button
+                      className={`button is-small is-link is-light${syncChecking ? ' is-loading' : ''}`}
+                      disabled={syncChecking || syncFixing}
+                      onClick={checkSync}
+                    >
+                      Check Sync
+                    </button>
+                  </div>
+                </div>
+
+                {syncFixResult && (
+                  <div className={`notification is-light py-3 px-4 mb-3 ${syncFixResult.errors?.length ? 'is-warning' : 'is-success'}`}>
+                    <strong>{syncFixResult.fixed}</strong> record{syncFixResult.fixed !== 1 ? 's' : ''} updated.
+                    {syncFixResult.errors?.length > 0 && (
+                      <ul className="mt-2">
+                        {syncFixResult.errors.map((e, i) => (
+                          <li key={i} className="is-size-7">{e.subscription}: {e.error}</li>
+                        ))}
+                      </ul>
+                    )}
+                    {syncFixResult.debug?.length > 0 && (
+                      <details className="mt-3">
+                        <summary className="is-size-7 has-text-grey" style={{ cursor: 'pointer' }}>Debug ({syncFixResult.debug.length} customers checked)</summary>
+                        <table className="table is-fullwidth is-size-7 mt-2 mb-0">
+                          <thead><tr><th>Customer</th><th>Stripe subs</th><th>Active</th><th>Has local</th><th>Action</th></tr></thead>
+                          <tbody>
+                            {syncFixResult.debug.map((row, i) => (
+                              <tr key={i}>
+                                <td>{row.user_email}<br/><code className="is-size-7">{row.stripe_customer_id}</code></td>
+                                <td>{row.stripe_subs_for_customer}</td>
+                                <td>{row.active_stripe_subs}</td>
+                                <td>{row.has_local ? 'yes' : 'no'}</td>
+                                <td>{row.action}{row.candidate_id && <><br/><code className="is-size-7">{row.candidate_id}</code></>}</td>
+                              </tr>
+                            ))}
+                          </tbody>
+                        </table>
+                      </details>
+                    )}
+                  </div>
+                )}
+
+                {syncReport && (
+                  <>
+                    <div className="is-flex" style={{ gap: '1.5rem', marginBottom: '0.75rem' }}>
+                      <span className="is-size-7">
+                        <span className="has-text-grey">Stripe total:</span>{' '}
+                        <strong>{syncReport.stripe_total}</strong>
+                      </span>
+                      <span className="is-size-7">
+                        <span className="has-text-grey">Local DB total:</span>{' '}
+                        <strong>{syncReport.local_total}</strong>
+                      </span>
+                    </div>
+
+                    {syncReport.issues.length === 0 ? (
+                      <p className="is-size-7 has-text-success has-text-weight-semibold">
+                        No issues found — local DB matches Stripe.
+                      </p>
+                    ) : (
+                      <>
+                        <div className="table-container mb-3">
+                          <table className="table is-fullwidth is-size-7 mb-0">
+                            <thead>
+                              <tr>
+                                <th>Issue</th>
+                                <th>User</th>
+                                <th>Subscription ID</th>
+                                <th>Local status</th>
+                                <th>Stripe status</th>
+                              </tr>
+                            </thead>
+                            <tbody>
+                              {syncReport.issues.map((issue, i) => (
+                                <tr key={i}>
+                                  <td>
+                                    <span className={`tag is-small ${
+                                      issue.type === 'orphaned'       ? 'is-danger is-light' :
+                                      issue.type === 'status_mismatch'? 'is-warning is-light' :
+                                      'is-info is-light'
+                                    }`}>
+                                      {issue.type.replace('_', ' ')}
+                                    </span>
+                                    <p className="has-text-grey mt-1" style={{ fontSize: '0.7rem' }}>{issue.description}</p>
+                                  </td>
+                                  <td>{issue.user_email}</td>
+                                  <td><code className="is-size-7">{issue.stripe_subscription_id}</code></td>
+                                  <td>{issue.local_status
+                                    ? <span className={`tag is-small ${STATUS_COLOR[issue.local_status] || 'is-light'}`}>{issue.local_status}</span>
+                                    : <span className="has-text-grey">—</span>}
+                                  </td>
+                                  <td>{issue.stripe_status
+                                    ? <span className={`tag is-small ${STATUS_COLOR[issue.stripe_status] || 'is-light'}`}>{issue.stripe_status}</span>
+                                    : <span className="has-text-grey">—</span>}
+                                  </td>
+                                </tr>
+                              ))}
+                            </tbody>
+                          </table>
+                        </div>
+                        <button
+                          className={`button is-warning is-small${syncFixing ? ' is-loading' : ''}`}
+                          disabled={syncFixing}
+                          onClick={fixSync}
+                        >
+                          Fix {syncReport.issues.length} Issue{syncReport.issues.length !== 1 ? 's' : ''}
+                        </button>
+                      </>
+                    )}
+                  </>
+                )}
               </div>
             )}
           </>

@@ -19,11 +19,13 @@ export default function NavbarEnd() {
 
   return (
     <>
-      <NavLink to="/login" className={({ isActive }) => `navbar-item${isActive ? ' is-active' : ''}`}>
+      <div className="navbar-item">
+      <NavLink to="/login" className="button is-light">
         Log in
       </NavLink>
+      </div>
       <div className="navbar-item">
-        <NavLink to="/signup" className="button is-light is-small">
+        <NavLink to="/signup" className="button is-light">
           Sign up
         </NavLink>
       </div>
