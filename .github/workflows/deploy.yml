@@ -72,7 +72,7 @@ jobs:
             --exclude='core/backend/staticfiles' \
             --exclude='core/backend/media' \
             ./ \
-            root@${{ vars.SERVER_IP }}:/var/www/beta.peeldev.com/
+            root@${{ vars.SERVER_IP }}:/var/www/beta.peeldev.com/public
 
       # -------------------------------------------------------
       # 5. Install deps, regen manifests, migrate, restart
