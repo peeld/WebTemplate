@@ -11,5 +11,5 @@ export const routes = [
 ]
 
 export const navItems = [
-  { label: 'Support', path: '/support' },
+  { label: 'Support', path: '/support', requiresAuth: true },
 ]

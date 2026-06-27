@@ -1,3 +1,5 @@
+import uuid
+
 from django.conf import settings
 from django.db import models
 
@@ -100,3 +102,34 @@ class Subscription(models.Model):
 
     def __str__(self):
         return f'{self.customer.user} — {self.status}'
+
+
+class LicenseKey(models.Model):
+    user             = models.ForeignKey(settings.AUTH_USER_MODEL, on_delete=models.CASCADE, related_name='license_keys')
+    product          = models.ForeignKey(Product, on_delete=models.CASCADE, related_name='license_keys')
+    key              = models.UUIDField(unique=True, default=uuid.uuid4, editable=False)
+    is_active        = models.BooleanField(default=True)
+    max_machines     = models.PositiveIntegerField(default=1)
+    offline_ttl_days = models.PositiveIntegerField(default=30)
+    created_at       = models.DateTimeField(auto_now_add=True)
+
+    class Meta:
+        unique_together = [('user', 'product')]
+
+    def __str__(self):
+        return f'{self.user} — {self.product.name} ({self.key})'
+
+
+class LicenseMachine(models.Model):
+    license         = models.ForeignKey(LicenseKey, on_delete=models.CASCADE, related_name='machines')
+    machine_id_hash = models.CharField(max_length=64)
+    label           = models.CharField(max_length=255, blank=True)
+    first_seen      = models.DateTimeField(auto_now_add=True)
+    last_seen       = models.DateTimeField(auto_now=True)
+    is_active       = models.BooleanField(default=True)
+
+    class Meta:
+        unique_together = [('license', 'machine_id_hash')]
+
+    def __str__(self):
+        return f'{self.license.user} — {self.label or self.machine_id_hash[:16]}'

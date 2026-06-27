@@ -74,4 +74,18 @@ export const authApi = {
       headers: { 'Content-Type': 'application/json' },
       body:    JSON.stringify({ refresh: refreshToken }),
     }),
+
+  // ── Org setup calls used during signup (calls orgs module API) ──────────────
+
+  /** List non-expired pending org invites for the authenticated user's email. */
+  signupPendingInvites: () =>
+    apiFetch('/api/orgs/my-invites/'),
+
+  /** Create a new org; the calling user becomes its owner. */
+  signupCreateOrg: (name) =>
+    apiFetch('/api/orgs/', { method: 'POST', body: JSON.stringify({ name }) }),
+
+  /** Accept a pending org invite by token. */
+  signupAcceptInvite: (token) =>
+    apiFetch(`/api/orgs/invites/${token}/accept/`, { method: 'POST', body: JSON.stringify({}) }),
 }

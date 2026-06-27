@@ -1,25 +1,23 @@
 /**
  * Signup.jsx
  *
- * Two-step account registration: account details → email verification.
- * Steps that depend on other modules (skills, sprints) are NOT included here;
- * those modules extend the post-signup flow via their own routes/hooks.
+ * Three-step account registration: account details → email verification → org setup.
  *
  * Steps
  * ─────
- * 0 — Account     username, email, password + reCAPTCHA, or Google OAuth
- * 1 — Verify      email verification code (skipped for Google accounts)
- * 2 — Done        navigate to /dashboard
+ * 0 — Account      username, email, password + reCAPTCHA, or Google OAuth
+ * 1 — Verify       email verification code (skipped for Google accounts)
+ * 2 — Organization optional: create a new org or accept a pending invite
  *
  * Auth flows
  * ──────────
- * Standard: POST /api/userauth/register/ → step 1 (email verify)
- * Google:   POST /api/userauth/google/register/ → step 2 (pre-verified)
+ * Standard: POST /api/userauth/register/ → step 1 (email verify) → step 2 (org)
+ * Google:   POST /api/userauth/google/register/ → step 2 (org, pre-verified)
  */
 
-import { useState }          from 'react'
-import { useNavigate, Link } from 'react-router-dom'
-import { useGoogleLogin }    from '@react-oauth/google'
+import { useState, useEffect } from 'react'
+import { useNavigate, Link }   from 'react-router-dom'
+import { useGoogleLogin }      from '@react-oauth/google'
 
 import { useAuth }        from '../context/AuthContext'
 import { useRecaptcha }   from '../hooks/useRecaptcha'
@@ -32,7 +30,7 @@ import EmailVerifyForm    from '../components/EmailVerifyForm'
 
 import { captureError, captureWarning, addBreadcrumb } from '@core/frontend/utils/logger'
 
-const SIGNUP_STEPS = ['Account', 'Verify']
+const SIGNUP_STEPS = ['Account', 'Verify', 'Organization']
 
 // ─── Step 0: Account ─────────────────────────────────────────────────────────
 
@@ -107,6 +105,144 @@ function Step0Account({ form, onChange, onSubmit, loading, errors, onGoogleSignu
           Already have an account?{' '}
           <Link to="/login">Log in</Link>
         </p>
+      </AuthCard>
+    </>
+  )
+}
+
+// ─── Step 2: Organization setup ──────────────────────────────────────────────
+
+function Step2Organization({ userEmail, onDone }) {
+  const [orgName, setOrgName]             = useState('')
+  const [creating, setCreating]           = useState(false)
+  const [createError, setCreateError]     = useState(null)
+  const [pendingInvites, setPendingInvites] = useState(null) // null = loading
+  const [acceptingToken, setAcceptingToken] = useState(null)
+
+  useEffect(() => {
+    authApi.signupPendingInvites()
+      .then(res => res.json())
+      .then(data => setPendingInvites(Array.isArray(data) ? data : []))
+      .catch(() => setPendingInvites([]))
+  }, [])
+
+  const handleCreateOrg = async (e) => {
+    e.preventDefault()
+    if (!orgName.trim()) return
+    setCreating(true)
+    setCreateError(null)
+    try {
+      const res  = await authApi.signupCreateOrg(orgName.trim())
+      const data = await res.json()
+      if (res.ok) {
+        onDone()
+      } else {
+        setCreateError(data.name?.[0] || data.error || 'Could not create organization.')
+      }
+    } catch {
+      setCreateError('Could not reach the server.')
+    } finally {
+      setCreating(false)
+    }
+  }
+
+  const handleAcceptInvite = async (token) => {
+    setAcceptingToken(token)
+    try {
+      const res = await authApi.signupAcceptInvite(token)
+      if (res.ok) onDone()
+    } catch {
+      // Non-fatal: user can skip and accept from the dashboard
+    } finally {
+      setAcceptingToken(null)
+    }
+  }
+
+  const hasPendingInvites = pendingInvites && pendingInvites.length > 0
+
+  return (
+    <>
+      <div className="has-text-centered mb-5">
+        <h1 className="title is-4">Set up your organization</h1>
+        <p className="subtitle is-6 has-text-grey">You can skip this and do it later from your dashboard.</p>
+      </div>
+
+      <AuthCard>
+        {/* Pending invites */}
+        {pendingInvites === null && (
+          <p className="has-text-grey is-size-7 mb-4">
+            <span className="icon is-small"><i className="fas fa-spinner fa-spin" /></span>
+            {' '}Checking for pending invites…
+          </p>
+        )}
+
+        {hasPendingInvites && (
+          <div className="mb-5">
+            <p className="label mb-2">Pending invites for {userEmail}</p>
+            {pendingInvites.map(invite => (
+              <div key={invite.token} className="box p-3 mb-2">
+                <div className="is-flex is-justify-content-space-between is-align-items-center">
+                  <div>
+                    <strong>{invite.org_name}</strong>
+                    {invite.invited_by_username && (
+                      <span className="has-text-grey ml-2" style={{ fontSize: '0.8rem' }}>
+                        invited by @{invite.invited_by_username}
+                      </span>
+                    )}
+                  </div>
+                  <button
+                    className={`button is-small is-primary ${acceptingToken === invite.token ? 'is-loading' : ''}`}
+                    onClick={() => handleAcceptInvite(invite.token)}
+                    disabled={!!acceptingToken}
+                  >
+                    Accept
+                  </button>
+                </div>
+              </div>
+            ))}
+            <hr />
+          </div>
+        )}
+
+        {/* Create org */}
+        <form onSubmit={handleCreateOrg}>
+          <div className="field">
+            <label className="label">Create a new organization</label>
+            <div className="control">
+              <input
+                className={`input ${createError ? 'is-danger' : ''}`}
+                type="text"
+                placeholder="Organization name"
+                value={orgName}
+                onChange={e => setOrgName(e.target.value)}
+                disabled={creating}
+                maxLength={200}
+              />
+            </div>
+            {createError && <p className="help is-danger">{createError}</p>}
+          </div>
+          <div className="field">
+            <button
+              type="submit"
+              className={`button is-primary is-fullwidth ${creating ? 'is-loading' : ''}`}
+              disabled={!orgName.trim() || creating}
+            >
+              Create organization
+            </button>
+          </div>
+        </form>
+
+        {pendingInvites !== null && !hasPendingInvites && (
+          <p className="has-text-grey mt-3" style={{ fontSize: '0.82rem' }}>
+            No pending invites found for {userEmail}. Ask an org admin to invite you once you're set up.
+          </p>
+        )}
+
+        <div className="has-text-centered mt-4">
+          <button className="button is-ghost is-small" onClick={onDone}>
+            Skip for now
+          </button>
+        </div>
       </AuthCard>
     </>
   )
@@ -189,7 +325,8 @@ export default function Signup() {
 
         login(data.access, data.refresh, data.user.username)
         removeRecaptcha()
-        navigate('/dashboard', { replace: true })
+        setForm(f => ({ ...f, email: data.user.email || f.email }))
+        setStep(2)
       } catch (err) {
         captureError(err, { operation: 'google_signup' }, 'auth')
         setErrors({ non_field_errors: ['Could not reach the server. Check your connection.'] })
@@ -219,7 +356,7 @@ export default function Signup() {
         if (data.access && data.refresh) {
           login(data.access, data.refresh, data.username || form.username)
         }
-        navigate('/dashboard', { replace: true })
+        setStep(2)
       }
     } catch (err) {
       captureError(err, { operation: 'verify_email' }, 'auth')
@@ -268,6 +405,12 @@ export default function Signup() {
                 code={code} onChange={setCode}
                 onVerify={handleVerify} verifying={verifying} error={verifyError}
                 onResend={handleResend} resending={resending} resendSent={resendSent}
+              />
+            )}
+            {step === 2 && (
+              <Step2Organization
+                userEmail={form.email}
+                onDone={() => navigate('/dashboard', { replace: true })}
               />
             )}
 

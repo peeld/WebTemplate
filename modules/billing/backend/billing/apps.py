@@ -6,8 +6,11 @@ class BillingConfig(AppConfig):
     name = 'billing'
 
     def ready(self):
-        # Ensures signal senders are available before any receivers connect.
-        import billing.signals  # noqa: F401
+        import billing.signals as sigs  # noqa: F401 — ensures signal senders exist
+
+        from billing.license_auth import _on_subscription_activated, _on_subscription_cancelled
+        sigs.subscription_activated.connect(_on_subscription_activated)
+        sigs.subscription_cancelled.connect(_on_subscription_cancelled)
 
         from django.conf import settings
         from django.core.exceptions import ImproperlyConfigured

@@ -39,7 +39,7 @@ export default function BillingUserSection() {
   const tagColor = hasSubscription ? (STATUS_COLOR[sub.status] || 'is-light') : 'is-light';
 
   return (
-    <div className="card">
+    <div className="card" style={{ width: '100%' }}>
       <header className="card-header">
         <p className="card-header-title">Billing</p>
       </header>

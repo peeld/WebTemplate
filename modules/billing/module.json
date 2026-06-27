@@ -5,7 +5,7 @@
   "npm_package": "@modules/billing",
   "url_prefix": "billing",
   "requires": [],
-  "pip_packages": ["stripe>=7.0"],
+  "pip_packages": ["stripe>=7.0", "PyJWT>=2.8", "cryptography>=42"],
   "settings_defaults": {
     "STRIPE_SECRET_KEY": "",
     "STRIPE_PUBLISHABLE_KEY": "",

@@ -7,7 +7,7 @@ export default function AccountSection() {
 
   if (!user) {
     return (
-      <div className="card">
+      <div className="card"  style={{ width: '100%' }}>
         <header className="card-header">
           <p className="card-header-title">Account</p>
         </header>
@@ -24,7 +24,7 @@ export default function AccountSection() {
   }
 
   return (
-    <div className="card">
+    <div className="card" style={{ width: '100%' }}>
       <header className="card-header">
         <p className="card-header-title">Account</p>
       </header>

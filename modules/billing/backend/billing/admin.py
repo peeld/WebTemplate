@@ -1,5 +1,5 @@
 from django.contrib import admin
-from .models import Product, ProductPrice, StripeCustomer, Subscription
+from .models import LicenseKey, LicenseMachine, Product, ProductPrice, StripeCustomer, Subscription
 
 
 class ProductPriceInline(admin.TabularInline):
@@ -38,3 +38,27 @@ class SubscriptionAdmin(admin.ModelAdmin):
     list_filter   = ('status',)
     search_fields = ('customer__user__username', 'stripe_subscription_id')
     readonly_fields = ('updated_at',)
+
+
+class LicenseMachineInline(admin.TabularInline):
+    model        = LicenseMachine
+    extra        = 0
+    fields       = ('machine_id_hash', 'label', 'is_active', 'first_seen', 'last_seen')
+    readonly_fields = ('machine_id_hash', 'first_seen', 'last_seen')
+
+
+@admin.register(LicenseKey)
+class LicenseKeyAdmin(admin.ModelAdmin):
+    list_display    = ('user', 'product', 'key', 'is_active', 'max_machines', 'offline_ttl_days', 'created_at')
+    list_filter     = ('is_active', 'product')
+    search_fields   = ('user__username', 'user__email', 'key')
+    readonly_fields = ('key', 'created_at')
+    inlines         = [LicenseMachineInline]
+
+
+@admin.register(LicenseMachine)
+class LicenseMachineAdmin(admin.ModelAdmin):
+    list_display    = ('license', 'machine_id_hash', 'label', 'is_active', 'last_seen')
+    list_filter     = ('is_active',)
+    search_fields   = ('license__user__username', 'machine_id_hash', 'label')
+    readonly_fields = ('machine_id_hash', 'first_seen', 'last_seen')

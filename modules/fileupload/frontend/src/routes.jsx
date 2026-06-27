@@ -7,5 +7,5 @@ export const routes = [
 ];
 
 export const navItems = [
-  { label: 'Files', path: '/files' },
+  { label: 'Files', path: '/files', requiresAuth: true },
 ];

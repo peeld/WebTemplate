@@ -14,6 +14,7 @@
  *   id:       number,   // from JWT payload.user_id
  *   username: string,
  *   token:    string,   // current access token
+ *   is_staff: boolean,  // from JWT payload.is_staff
  * }
  *
  * Token lifecycle
@@ -122,7 +123,10 @@ export function AuthProvider({ children }) {
     const token    = localStorage.getItem('access')
     const username = localStorage.getItem('username')
     const id       = localStorage.getItem('user_id')
-    return token ? { id: Number(id), username, token } : null
+    if (!token) return null
+    let is_staff = false
+    try { is_staff = !!decodeJWT(token).is_staff } catch (_) {}
+    return { id: Number(id), username, token, is_staff }
   })
 
   const [isLoading, setIsLoading] = useState(true)
@@ -200,16 +204,18 @@ export function AuthProvider({ children }) {
       // Re-decode the new token for its actual expiry rather than
       // assuming a fixed interval which drifts if the backend config changes.
       let expiresIn = 60 * 60 * 1000 // 1 hour safe fallback
+      let is_staff = null
       try {
         const payload = decodeJWT(data.access)
         expiresIn = payload.exp * 1000 - Date.now()
+        is_staff  = !!payload.is_staff
       } catch (decodeErr) {
         captureWarning('Could not decode refreshed access token — using 1h fallback', {
           error: decodeErr.message,
         })
       }
 
-      setUser(prev => ({ ...prev, token: data.access }))
+      setUser(prev => ({ ...prev, token: data.access, ...(is_staff !== null && { is_staff }) }))
       scheduleRefresh(expiresIn)
       addBreadcrumb('Token refresh succeeded', { expiresIn }, 'info')
 
@@ -278,10 +284,12 @@ export function AuthProvider({ children }) {
     let userId = null
     let expiresIn = 60 * 60 * 1000 // 1 hour safe fallback
 
+    let is_staff = false
     try {
       const payload = decodeJWT(token)
       userId    = payload.user_id
       expiresIn = payload.exp * 1000 - Date.now()
+      is_staff  = !!payload.is_staff
     } catch (err) {
       // A decode failure here means the token is malformed. The user will
       // appear logged in but the refresh cycle won't have correct timing.
@@ -295,7 +303,7 @@ export function AuthProvider({ children }) {
     localStorage.setItem('username', username)
     if (userId !== null) localStorage.setItem('user_id', String(userId))
 
-    const nextUser = { id: userId, username, token }
+    const nextUser = { id: userId, username, token, is_staff }
     setSentryUser({ id: userId, username })
     setUser(nextUser)
     scheduleRefresh(expiresIn)

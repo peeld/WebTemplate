@@ -1,0 +1,13 @@
+{
+  "name": "orgs",
+  "version": "0.1.0",
+  "django_app": "orgs",
+  "npm_package": "@modules/orgs",
+  "url_prefix": "orgs",
+  "requires": ["userauth"],
+  "pip_packages": [],
+  "django_apps": [],
+  "middleware": [],
+  "settings_defaults": {},
+  "description": "Multi-org support: organisations, membership roles, and email invitations."
+}

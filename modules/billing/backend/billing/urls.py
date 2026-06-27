@@ -6,6 +6,7 @@ from .views import (
     AdminProductListView, AdminProductDetailView, AdminSubscriptionListView, AdminSubscriptionSyncView,
     AdminProductPriceListView, AdminProductPriceDetailView, AdminProductSyncView,
     AdminProductImageListView, AdminProductImageDetailView,
+    LicenseActivateView, LicenseCheckinView, LicenseMachineListView, LicenseMachineDeactivateView,
 )
 
 app_name = 'billing'
@@ -30,4 +31,9 @@ urlpatterns = [
     path('admin/subscriptions/sync/', AdminSubscriptionSyncView.as_view(),     name='admin-subscriptions-sync'),
     path('admin/products/<int:product_pk>/images/',          AdminProductImageListView.as_view(),   name='admin-product-images'),
     path('admin/products/<int:product_pk>/images/<int:pk>/', AdminProductImageDetailView.as_view(), name='admin-product-image-detail'),
+
+    path('license/activate/',                            LicenseActivateView.as_view(),           name='license-activate'),
+    path('license/checkin/',                             LicenseCheckinView.as_view(),             name='license-checkin'),
+    path('license/machines/',                            LicenseMachineListView.as_view(),         name='license-machines'),
+    path('license/machines/<str:machine_id_hash>/',      LicenseMachineDeactivateView.as_view(),   name='license-machine-deactivate'),
 ]

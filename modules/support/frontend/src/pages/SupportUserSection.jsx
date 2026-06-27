@@ -18,12 +18,12 @@ export default function SupportUserSection() {
   const recent = tickets.slice(0, 3)
 
   return (
-    <div className="card">
+    <div className="card"  style={{ width: '100%' }}>
+      <header className="card-header">
+        <p className="card-header-title">Support</p>
+      </header>
+
       <div className="card-content">
-        <div className="is-flex is-justify-content-space-between is-align-items-center mb-3">
-          <p className="title is-6 mb-0">Support</p>
-          <Link to="/support" className="button is-small is-light">View all</Link>
-        </div>
 
         {loading ? (
           <p className="has-text-grey is-size-7">Loading…</p>

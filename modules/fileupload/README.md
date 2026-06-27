@@ -69,19 +69,19 @@ Create an IAM user (or role) for the Django app with this policy:
       "Sid": "PresignUpload",
       "Effect": "Allow",
       "Action": "s3:PutObject",
-      "Resource": "arn:aws:s3:::your-app-uploads/*"
+      "Resource": "arn:aws:s3:::media-incoming-359565655000-us-west-2-an/*"
     },
     {
       "Sid": "PresignSourceRead",
       "Effect": "Allow",
       "Action": "s3:GetObject",
-      "Resource": "arn:aws:s3:::your-app-uploads/*"
+      "Resource": "arn:aws:s3:::media-incoming-359565655000-us-west-2-an/*"
     },
     {
       "Sid": "PresignProcessedRead",
       "Effect": "Allow",
       "Action": "s3:GetObject",
-      "Resource": "arn:aws:s3:::your-app-processed/*"
+      "Resource": "arn:aws:s3:::media-incoming-359565655000-us-west-2-an  /*"
     }
   ]
 }

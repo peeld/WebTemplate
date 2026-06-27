@@ -13,7 +13,8 @@ from rest_framework.permissions import IsAuthenticated, IsAdminUser, AllowAny
 from rest_framework.response import Response
 from rest_framework.views import APIView
 
-from .models import Product, ProductImage, ProductPrice, StripeCustomer, Subscription
+from .license_auth import SubscriptionRequired, issue_license_token, verify_license_request
+from .models import LicenseKey, LicenseMachine, Product, ProductImage, ProductPrice, StripeCustomer, Subscription
 from .serializers import ProductSerializer, SubscriptionSerializer, AdminProductSerializer, AdminProductPriceSerializer, AdminSubscriptionSerializer, ProductImageSerializer
 from .signals import checkout_completed, subscription_activated, subscription_cancelled, payment_completed
 
@@ -1008,4 +1009,122 @@ class AdminProductImageDetailView(APIView):
         image.image.delete(save=False)
         image.delete()
         logger.info('Deleted image %s from product %s', pk, product_pk)
+        return Response(status=204)
+
+
+# ── License endpoints ──────────────────────────────────────────────────────────
+
+@method_decorator(csrf_exempt, name='dispatch')
+class LicenseActivateView(APIView):
+    """
+    First-time activation or reinstall. Registers the machine and returns a
+    signed offline JWT. The client stores this token locally (registry / config
+    file) and uses it for offline verification until it expires.
+    """
+    permission_classes = [AllowAny]
+
+    def post(self, request):
+        lic, machine_id_hash = verify_license_request(request)
+        label = request.data.get('machine_label', '')
+
+        try:
+            machine = lic.machines.get(machine_id_hash=machine_id_hash)
+            if not machine.is_active:
+                return Response({'detail': 'This machine has been deactivated.'}, status=403)
+            if label:
+                machine.label = label
+            machine.save()  # refreshes last_seen via auto_now
+        except LicenseMachine.DoesNotExist:
+            active_count = lic.machines.filter(is_active=True).count()
+            if active_count >= lic.max_machines:
+                machines_data = list(
+                    lic.machines.filter(is_active=True).values('machine_id_hash', 'label', 'last_seen')
+                )
+                return Response(
+                    {
+                        'detail':       'Machine limit reached.',
+                        'max_machines': lic.max_machines,
+                        'machines':     machines_data,
+                    },
+                    status=409,
+                )
+            machine = LicenseMachine.objects.create(
+                license=lic,
+                machine_id_hash=machine_id_hash,
+                label=label,
+            )
+            logger.info('Activated machine %s on license %s', machine_id_hash[:8], lic.key)
+
+        token, expires_at = issue_license_token(lic, machine_id_hash)
+        return Response({
+            'token':         token,
+            'expires_at':    expires_at.isoformat(),
+            'machines_used': lic.machines.filter(is_active=True).count(),
+            'max_machines':  lic.max_machines,
+        })
+
+
+@method_decorator(csrf_exempt, name='dispatch')
+class LicenseCheckinView(APIView):
+    """
+    Renewal check-in. The machine must already be registered. Returns a fresh
+    signed JWT to extend the offline grace period.
+    """
+    permission_classes = [AllowAny]
+
+    def post(self, request):
+        lic, machine_id_hash = verify_license_request(request)
+
+        try:
+            machine = lic.machines.get(machine_id_hash=machine_id_hash, is_active=True)
+        except LicenseMachine.DoesNotExist:
+            return Response(
+                {'detail': 'Machine not registered or deactivated. Call /activate/ first.'},
+                status=403,
+            )
+
+        machine.save()  # refreshes last_seen
+        token, expires_at = issue_license_token(lic, machine_id_hash)
+        return Response({'token': token, 'expires_at': expires_at.isoformat()})
+
+
+class LicenseMachineListView(APIView):
+    """List active machines registered to the authenticated user's license(s)."""
+    permission_classes = [IsAuthenticated]
+
+    def get(self, request):
+        machines = (
+            LicenseMachine.objects
+            .filter(license__user=request.user, is_active=True)
+            .select_related('license__product')
+            .order_by('license__product__name', '-last_seen')
+        )
+        data = [
+            {
+                'machine_id_hash': m.machine_id_hash,
+                'label':           m.label,
+                'product':         m.license.product.name,
+                'product_slug':    m.license.product.slug,
+                'first_seen':      m.first_seen.isoformat(),
+                'last_seen':       m.last_seen.isoformat(),
+            }
+            for m in machines
+        ]
+        return Response(data)
+
+
+class LicenseMachineDeactivateView(APIView):
+    """Deactivate a machine so the license slot can be reused on another PC."""
+    permission_classes = [IsAuthenticated]
+
+    def delete(self, request, machine_id_hash):
+        machine = get_object_or_404(
+            LicenseMachine,
+            license__user=request.user,
+            machine_id_hash=machine_id_hash,
+            is_active=True,
+        )
+        machine.is_active = False
+        machine.save(update_fields=['is_active'])
+        logger.info('User %s deactivated machine %s', request.user.pk, machine_id_hash[:8])
         return Response(status=204)
