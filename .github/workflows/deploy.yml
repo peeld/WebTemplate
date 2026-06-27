@@ -78,6 +78,8 @@ jobs:
       # 5. Install deps, regen manifests, migrate, restart
       # -------------------------------------------------------
       - name: Activate site
+        env:
+          SECRET_KEY: ${{ secrets.SENTRY_KEY }}
         run: |
           ssh root@${{ vars.SERVER_IP }} << 'EOF'
             set -e
