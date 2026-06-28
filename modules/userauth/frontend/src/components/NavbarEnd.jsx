@@ -13,9 +13,9 @@ export default function NavbarEnd() {
           <a className="navbar-item" onClick={logout}>
             Log out
           </a>
-          <a className="navbar-item" to="/dashboard">
+          <NavLink to="/dashboard" className="navbar-item" >
             Dashboard
-          </a>
+          </NavLink>
 
         </div>
       </div>

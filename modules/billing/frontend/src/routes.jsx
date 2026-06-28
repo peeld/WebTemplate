@@ -7,12 +7,14 @@ import CartPage from './pages/CartPage.jsx';
 import CheckoutPage from './pages/CheckoutPage.jsx';
 import CheckoutProcessingPage from './pages/CheckoutProcessingPage.jsx';
 import CheckoutSuccessPage from './pages/CheckoutSuccessPage.jsx';
+import AccountPage from './pages/AccountPage.jsx';
 
 export const routes = [
   { path: '/billing/pricing',             element: <PricingPage /> },
   { path: '/billing/store',               element: <StorePage /> },
   { path: '/billing/subscription',        element: <SubscriptionPage /> },
   { path: '/billing/manage',              element: <ManageBillingPage /> },
+  { path: '/billing/account',             element: <AccountPage /> },
   { path: '/billing/admin',               element: <AdminBillingPage /> },
   { path: '/billing/cart',                element: <CartPage /> },
   { path: '/billing/checkout',            element: <CheckoutPage /> },

@@ -18,11 +18,14 @@ export const createCheckoutSession = (priceId, mode = 'subscription') =>
 export const getSubscription = () =>
   get('/api/billing/subscription/');
 
-export const cancelSubscription = () =>
-  post('/api/billing/subscription/cancel/', {});
+export const cancelSubscription = (subscriptionId) =>
+  post('/api/billing/subscription/cancel/', { subscription_id: subscriptionId });
 
-export const resumeSubscription = () =>
-  post('/api/billing/subscription/resume/', {});
+export const resumeSubscription = (subscriptionId) =>
+  post('/api/billing/subscription/resume/', { subscription_id: subscriptionId });
+
+export const changeSubscription = (subscriptionId, priceId) =>
+  post('/api/billing/subscription/change/', { subscription_id: subscriptionId, price_id: priceId });
 
 export const openPortal = () =>
   post('/api/billing/portal/', {});
@@ -41,6 +44,9 @@ export const adminDeleteProduct = (id) =>
 
 export const adminGetSubscriptions = () =>
   get('/api/billing/admin/subscriptions/');
+
+export const adminGetLicenses = () =>
+  get('/api/billing/admin/licenses/');
 
 export const adminCheckSubscriptionSync = () =>
   get('/api/billing/admin/subscriptions/sync/');
@@ -78,3 +84,12 @@ export const executeCart = (paymentMethod, items, setupIntentId = null) =>
     items,
     ...(setupIntentId ? { setup_intent_id: setupIntentId } : {}),
   });
+
+export const getLicenses = () =>
+  get('/api/billing/license/');
+
+export const createInstallToken = (licenseId) =>
+  post(`/api/billing/license/${licenseId}/install-token/`, {});
+
+export const exchangeInstallToken = (token) =>
+  post('/api/billing/license/install-token/exchange/', { token });

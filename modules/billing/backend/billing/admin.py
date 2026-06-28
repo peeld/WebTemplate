@@ -1,5 +1,6 @@
 from django.contrib import admin
-from .models import LicenseKey, LicenseMachine, Product, ProductPrice, StripeCustomer, Subscription
+from django.utils import timezone
+from .models import LicenseKey, LicenseMachine, Product, ProductPrice, StripeCustomer, Subscription, SubscriptionItem
 
 
 class ProductPriceInline(admin.TabularInline):
@@ -32,12 +33,41 @@ class StripeCustomerAdmin(admin.ModelAdmin):
     readonly_fields = ('created_at',)
 
 
+class SubscriptionItemInline(admin.TabularInline):
+    model           = SubscriptionItem
+    extra           = 0
+    fields          = ('stripe_price_id', 'stripe_product_id', 'quantity')
+    readonly_fields = ('stripe_price_id', 'stripe_product_id', 'quantity')
+
+
 @admin.register(Subscription)
 class SubscriptionAdmin(admin.ModelAdmin):
-    list_display  = ('customer', 'status', 'stripe_price_id', 'current_period_end', 'cancel_at_period_end')
-    list_filter   = ('status',)
-    search_fields = ('customer__user__username', 'stripe_subscription_id')
+    list_display    = ('customer', 'status', 'term', 'days_remaining', 'current_period_end', 'cancel_at_period_end')
+    list_filter     = ('status',)
+    search_fields   = ('customer__user__username', 'stripe_subscription_id')
     readonly_fields = ('updated_at',)
+    inlines         = [SubscriptionItemInline]
+
+    def get_queryset(self, request):
+        return super().get_queryset(request).prefetch_related('items')
+
+    @admin.display(description='Term')
+    def term(self, obj):
+        price_ids = [item.stripe_price_id for item in obj.items.all()]
+        if not price_ids:
+            return '—'
+        intervals = (
+            ProductPrice.objects
+            .filter(stripe_price_id__in=price_ids)
+            .values_list('interval', flat=True)
+            .distinct()
+        )
+        labels = {'week': 'Weekly', 'month': 'Monthly', 'year': 'Annual'}
+        return ', '.join(labels.get(i, i) for i in intervals) or '—'
+
+    @admin.display(description='Days remaining')
+    def days_remaining(self, obj):
+        return max((obj.current_period_end - timezone.now()).days, 0)
 
 
 class LicenseMachineInline(admin.TabularInline):
@@ -49,11 +79,24 @@ class LicenseMachineInline(admin.TabularInline):
 
 @admin.register(LicenseKey)
 class LicenseKeyAdmin(admin.ModelAdmin):
-    list_display    = ('user', 'product', 'key', 'is_active', 'max_machines', 'offline_ttl_days', 'created_at')
+    list_display    = ('user', 'product', 'key', 'is_active', 'subscription_status', 'machines_used', 'max_machines', 'created_at')
     list_filter     = ('is_active', 'product')
     search_fields   = ('user__username', 'user__email', 'key')
     readonly_fields = ('key', 'created_at')
     inlines         = [LicenseMachineInline]
+
+    def get_queryset(self, request):
+        return super().get_queryset(request).select_related('subscription').prefetch_related('machines')
+
+    @admin.display(description='Subscription')
+    def subscription_status(self, obj):
+        if obj.subscription:
+            return obj.subscription.get_status_display()
+        return '—'
+
+    @admin.display(description='Machines used')
+    def machines_used(self, obj):
+        return sum(1 for m in obj.machines.all() if m.is_active)
 
 
 @admin.register(LicenseMachine)

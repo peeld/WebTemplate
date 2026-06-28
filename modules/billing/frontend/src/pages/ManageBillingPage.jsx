@@ -1,7 +1,7 @@
 import { useEffect, useState } from 'react';
 import { Link } from 'react-router-dom';
 import { addBreadcrumb } from '@core/frontend/utils/logger';
-import { getSubscription, cancelSubscription, resumeSubscription } from '../api.js';
+import { getSubscription, cancelSubscription, resumeSubscription, changeSubscription, getProducts } from '../api.js';
 
 const STATUS_COLOR = {
   active:             'is-success',
@@ -15,11 +15,16 @@ const STATUS_COLOR = {
 };
 
 export default function ManageBillingPage() {
-  const [sub, setSub]           = useState(null);
-  const [loading, setLoading]   = useState(true);
-  const [error, setError]       = useState(null);
-  const [working, setWorking]   = useState(false);
-  const [confirm, setConfirm]   = useState(false);
+  const [sub, setSub]                 = useState(null);
+  const [loading, setLoading]         = useState(true);
+  const [error, setError]             = useState(null);
+  const [working, setWorking]         = useState(false);
+  const [confirm, setConfirm]         = useState(false);
+  const [showChangePlan, setShowChangePlan] = useState(false);
+  const [plans, setPlans]             = useState([]);
+  const [plansLoading, setPlansLoading] = useState(false);
+  const [planError, setPlanError]     = useState(null);
+  const [selectedPrice, setSelectedPrice] = useState(null);
 
   useEffect(() => {
     async function load() {
@@ -27,7 +32,7 @@ export default function ManageBillingPage() {
         const res  = await getSubscription();
         if (res.status === 401) { setLoading(false); return; }
         const data = await res.json();
-        if (res.ok) setSub(data);
+        if (res.ok) setSub(data[0] || null);
         else setError(data.detail || data.error || 'Failed to load subscription.');
       } catch {
         setError('Network error.');
@@ -43,7 +48,7 @@ export default function ManageBillingPage() {
     setWorking(true);
     setError(null);
     try {
-      const res  = await cancelSubscription();
+      const res  = await cancelSubscription(sub.stripe_subscription_id);
       const data = await res.json();
       if (res.ok) { setSub(data); setConfirm(false); }
       else setError(data.error || 'Failed to cancel subscription.');
@@ -59,10 +64,55 @@ export default function ManageBillingPage() {
     setWorking(true);
     setError(null);
     try {
-      const res  = await resumeSubscription();
+      const res  = await resumeSubscription(sub.stripe_subscription_id);
       const data = await res.json();
       if (res.ok) setSub(data);
       else setError(data.error || 'Failed to resume subscription.');
+    } catch {
+      setError('Network error.');
+    } finally {
+      setWorking(false);
+    }
+  }
+
+  async function handleOpenChangePlan() {
+    setShowChangePlan(true);
+    setSelectedPrice(null);
+    setPlansLoading(true);
+    setPlanError(null);
+    try {
+      const res  = await getProducts();
+      const data = await res.json();
+      if (!res.ok) { setPlanError(data.error || 'Failed to load plans.'); return; }
+      const prices = [];
+      for (const product of data) {
+        for (const price of product.prices) {
+          if (price.price_type === 'recurring' && price.is_active) {
+            prices.push({ ...price, productName: product.name });
+          }
+        }
+      }
+      setPlans(prices);
+    } catch {
+      setPlanError('Network error.');
+    } finally {
+      setPlansLoading(false);
+    }
+  }
+
+  async function handleChangePlan() {
+    setWorking(true);
+    setError(null);
+    try {
+      const res  = await changeSubscription(sub.stripe_subscription_id, selectedPrice);
+      const data = await res.json();
+      if (res.ok) {
+        setSub(data);
+        setShowChangePlan(false);
+        setSelectedPrice(null);
+      } else {
+        setError(data.error || 'Failed to change plan.');
+      }
     } catch {
       setError('Network error.');
     } finally {
@@ -106,9 +156,9 @@ export default function ManageBillingPage() {
               <div className="level-left">
                 <div>
                   <p className="is-size-5 has-text-weight-semibold">
-                    {sub.product_name || 'Subscription'}
+                    {sub.items?.[0]?.product_name || 'Subscription'}
                   </p>
-                  <p className="is-size-7 has-text-grey">{sub.stripe_price_id}</p>
+                  <p className="is-size-7 has-text-grey">{sub.items?.[0]?.stripe_price_id}</p>
                 </div>
               </div>
               <div className="level-right">
@@ -186,9 +236,64 @@ export default function ManageBillingPage() {
             )}
 
             <div className="mt-5">
-              <Link to="/billing/pricing" className="button is-light">
-                Change Plan
-              </Link>
+              {!showChangePlan && (
+                <button className="button is-light" onClick={handleOpenChangePlan}>
+                  Change Plan
+                </button>
+              )}
+
+              {showChangePlan && (
+                <div>
+                  <p className="has-text-weight-semibold mb-3">Select a new plan</p>
+                  {plansLoading && <p className="has-text-grey is-size-7">Loading plans…</p>}
+                  {planError && <p className="has-text-danger is-size-7 mb-2">{planError}</p>}
+                  {!plansLoading && plans.map(p => {
+                    const isCurrent = p.stripe_price_id === sub.items?.[0]?.stripe_price_id;
+                    const isSelected = selectedPrice === p.stripe_price_id;
+                    return (
+                      <div
+                        key={p.stripe_price_id}
+                        className={`box mb-2${isSelected ? ' has-background-primary-light' : ''}`}
+                        style={{ cursor: isCurrent ? 'default' : 'pointer' }}
+                        onClick={() => !isCurrent && setSelectedPrice(p.stripe_price_id)}
+                      >
+                        <div className="level is-mobile">
+                          <div className="level-left">
+                            <div>
+                              <p className="has-text-weight-medium">{p.productName}</p>
+                              <p className="is-size-7 has-text-grey">
+                                {(p.amount / 100).toLocaleString('en-US', { style: 'currency', currency: p.currency.toUpperCase() })} / {p.interval}
+                              </p>
+                            </div>
+                          </div>
+                          <div className="level-right">
+                            {isCurrent && <span className="tag is-info is-light">Current</span>}
+                            {isSelected && !isCurrent && <span className="tag is-primary is-light">Selected</span>}
+                          </div>
+                        </div>
+                      </div>
+                    );
+                  })}
+                  <div className="buttons mt-3">
+                    {selectedPrice && selectedPrice !== sub.items?.[0]?.stripe_price_id && (
+                      <button
+                        className={`button is-primary${working ? ' is-loading' : ''}`}
+                        disabled={working}
+                        onClick={handleChangePlan}
+                      >
+                        Confirm Change
+                      </button>
+                    )}
+                    <button
+                      className="button is-light"
+                      disabled={working}
+                      onClick={() => { setShowChangePlan(false); setSelectedPrice(null); }}
+                    >
+                      Cancel
+                    </button>
+                  </div>
+                </div>
+              )}
             </div>
           </div>
         )}

@@ -7,6 +7,7 @@ import {
   adminUpdateProduct,
   adminDeleteProduct,
   adminGetSubscriptions,
+  adminGetLicenses,
   adminSyncProduct,
   adminCreateProductPrice,
   adminUpdateProductPrice,
@@ -22,7 +23,7 @@ const EMPTY_PRODUCT = {
   fulfillment_type: 'digital', is_active: true, sort_order: 0, features: '',
 };
 
-const EMPTY_PRICE = { price_type: 'one_time', interval: '', amount: '', currency: 'usd', is_active: true };
+const EMPTY_PRICE = { price_type: 'one_time', interval: '', amount: '', currency: 'usd', days_granted: '', is_active: true };
 
 const INTERVAL_OPTIONS = [
   { value: 'week',  label: 'Weekly' },
@@ -157,13 +158,13 @@ function ProductForm({ values, onChange, onSave, onCancel, saveLabel = 'Save', s
 }
 
 function AddPriceForm({ canAddOneTime, availableIntervals, onAdd, onCancel, addLabel = 'Add', saving = false }) {
+  const canAddRecurring = availableIntervals.length > 0;
+
   const [form, setForm] = useState(() => ({
     ...EMPTY_PRICE,
-    price_type: canAddOneTime ? 'one_time' : 'recurring',
-    interval: !canAddOneTime && availableIntervals[0] ? availableIntervals[0].value : '',
+    price_type: canAddRecurring && !canAddOneTime ? 'recurring' : 'one_time',
+    interval: canAddRecurring ? (availableIntervals[0]?.value || '') : '',
   }));
-
-  const canAddRecurring = availableIntervals.length > 0;
 
   function handleTypeChange(type) {
     setForm(f => ({
@@ -181,7 +182,7 @@ function AddPriceForm({ canAddOneTime, availableIntervals, onAdd, onCancel, addL
           <div className="control">
             <div className="select is-small">
               <select value={form.price_type} onChange={e => handleTypeChange(e.target.value)}>
-                {canAddOneTime   && <option value="one_time">One-time</option>}
+                <option value="one_time">One-time</option>
                 {canAddRecurring && <option value="recurring">Recurring</option>}
               </select>
             </div>
@@ -227,6 +228,23 @@ function AddPriceForm({ canAddOneTime, availableIntervals, onAdd, onCancel, addL
           </div>
         </div>
 
+        {form.price_type === 'one_time' && (
+          <div className="field mb-0">
+            <label className="label is-small">Days granted</label>
+            <div className="control">
+              <input
+                className="input is-small"
+                type="number"
+                min="1"
+                placeholder="e.g. 90"
+                value={form.days_granted}
+                onChange={e => setForm(f => ({ ...f, days_granted: e.target.value }))}
+                style={{ width: 90 }}
+              />
+            </div>
+          </div>
+        )}
+
         <div className="field mb-0">
           <div className="buttons">
             <button
@@ -256,11 +274,12 @@ function PendingPricesEditor({ prices, onChange }) {
   function handleAdd(form) {
     if (!form.amount) return;
     onChange([...prices, {
-      _localId:   Date.now(),
-      price_type: form.price_type,
-      amount:     Math.round(Number(form.amount) * 100),
-      currency:   form.currency,
-      interval:   form.price_type === 'recurring' ? form.interval : '',
+      _localId:    Date.now(),
+      price_type:  form.price_type,
+      amount:      Math.round(Number(form.amount) * 100),
+      currency:    form.currency,
+      interval:    form.price_type === 'recurring' ? form.interval : '',
+      days_granted: form.price_type === 'one_time' && form.days_granted ? Number(form.days_granted) : null,
     }]);
     setShowAdd(false);
   }
@@ -284,13 +303,14 @@ function PendingPricesEditor({ prices, onChange }) {
       {prices.length > 0 && (
         <table className="table is-fullwidth is-size-7 mt-2 mb-0" style={{ border: 'none' }}>
           <thead>
-            <tr><th>Type</th><th>Amount</th><th /></tr>
+            <tr><th>Type</th><th>Amount</th><th>Days</th><th /></tr>
           </thead>
           <tbody>
             {prices.map(p => (
               <tr key={p._localId}>
                 <td className="has-text-weight-semibold">{priceTypeLabel(p)}</td>
                 <td>{formatPrice(p.amount, p.currency)}</td>
+                <td>{p.days_granted ? `${p.days_granted}d` : '—'}</td>
                 <td>
                   <button
                     className="button is-small is-danger is-light"
@@ -338,6 +358,7 @@ function PricesPanel({ productId, initialPrices = [], onError }) {
         amount:     Math.round(Number(form.amount) * 100),
         currency:   form.currency,
         ...(form.price_type === 'recurring' ? { interval: form.interval } : {}),
+        ...(form.price_type === 'one_time' && form.days_granted ? { days_granted: Number(form.days_granted) } : {}),
       };
       const res  = await adminCreateProductPrice(productId, payload);
       const data = await res.json();
@@ -377,7 +398,7 @@ function PricesPanel({ productId, initialPrices = [], onError }) {
           </p>
         </div>
         <div className="level-right">
-          {!showAdd && canAdd && (
+          {!showAdd && (
             <button className="button is-small is-light" onClick={() => setShowAdd(true)}>+ Add price</button>
           )}
         </div>
@@ -389,6 +410,7 @@ function PricesPanel({ productId, initialPrices = [], onError }) {
             <tr>
               <th>Type</th>
               <th>Amount</th>
+              <th>Days</th>
               <th>Stripe Price ID</th>
               <th>Active</th>
               <th />
@@ -399,6 +421,7 @@ function PricesPanel({ productId, initialPrices = [], onError }) {
               <tr key={p.id}>
                 <td className="has-text-weight-semibold">{priceTypeLabel(p)}</td>
                 <td>{formatPrice(p.amount, p.currency)}</td>
+                <td>{p.days_granted ? `${p.days_granted}d` : '—'}</td>
                 <td><code className="has-text-grey">{p.stripe_price_id || '—'}</code></td>
                 <td>
                   <span className={`tag is-small ${p.is_active ? 'is-success' : 'is-light'}`}>
@@ -650,8 +673,10 @@ function ImagesPanel({ productId, initialImages = [], onError, thumbnail, onThum
 export default function AdminBillingPage() {
   const [products, setProducts]             = useState([]);
   const [subscriptions, setSubscriptions]   = useState([]);
+  const [licenses, setLicenses]             = useState([]);
   const [loadingP, setLoadingP]             = useState(true);
   const [loadingS, setLoadingS]             = useState(true);
+  const [loadingL, setLoadingL]             = useState(true);
   const [error, setError]                   = useState(null);
   const [activeTab, setActiveTab]           = useState('products');
   const [editingId, setEditingId]           = useState(null);
@@ -709,8 +734,19 @@ export default function AdminBillingPage() {
       finally { setLoadingS(false); }
     }
 
+    async function loadLicenses() {
+      try {
+        const r = await adminGetLicenses();
+        if (!r.ok) { setLoadingL(false); return; }
+        const data = await r.json();
+        if (Array.isArray(data)) setLicenses(data);
+      } catch { /* surfaced via products load */ }
+      finally { setLoadingL(false); }
+    }
+
     loadProducts().catch(() => { setError('Network error loading products.'); setLoadingP(false); });
     loadSubscriptions();
+    loadLicenses();
   }, []);
 
   function startEdit(product) {
@@ -922,6 +958,14 @@ export default function AdminBillingPage() {
                 )}
               </a>
             </li>
+            <li className={activeTab === 'licenses' ? 'is-active' : ''}>
+              <a onClick={() => setActiveTab('licenses')}>
+                Licenses
+                {!loadingL && licenses.length > 0 && (
+                  <span className="tag is-rounded is-light ml-2" style={{ fontSize: '0.7rem' }}>{licenses.length}</span>
+                )}
+              </a>
+            </li>
           </ul>
         </div>
 
@@ -1087,6 +1131,58 @@ export default function AdminBillingPage() {
           </>
         )}
 
+        {activeTab === 'licenses' && (
+          <>
+            {loadingL && <p className="has-text-grey">Loading licenses…</p>}
+
+            {!loadingL && licenses.length === 0 && (
+              <p className="has-text-grey">No licenses found.</p>
+            )}
+
+            {!loadingL && licenses.length > 0 && (
+              <div className="table-container">
+                <table className="table is-fullwidth is-striped is-hoverable is-size-7">
+                  <thead>
+                    <tr>
+                      <th>User</th>
+                      <th>Product</th>
+                      <th>Key</th>
+                      <th>Status</th>
+                      <th>Subscription</th>
+                      <th>Machines</th>
+                      <th>Created</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {licenses.map(lic => (
+                      <tr key={lic.id}>
+                        <td>
+                          <p>{lic.username}</p>
+                          <p className="has-text-grey">{lic.user_email}</p>
+                        </td>
+                        <td>{lic.product_name}</td>
+                        <td><code className="has-text-grey">{String(lic.key).slice(0, 8)}…</code></td>
+                        <td>
+                          <span className={`tag is-small ${lic.is_active ? 'is-success' : 'is-light'}`}>
+                            {lic.is_active ? 'Active' : 'Inactive'}
+                          </span>
+                        </td>
+                        <td>
+                          {lic.subscription_status
+                            ? <span className={`tag is-small ${STATUS_COLOR[lic.subscription_status] || 'is-light'}`}>{lic.subscription_status.replace(/_/g, ' ')}</span>
+                            : <span className="has-text-grey">—</span>}
+                        </td>
+                        <td>{lic.machines_used} / {lic.max_machines}</td>
+                        <td>{new Date(lic.created_at).toLocaleDateString()}</td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+            )}
+          </>
+        )}
+
         {activeTab === 'subscriptions' && (
           <>
             {loadingS && <p className="has-text-grey">Loading subscriptions…</p>}
@@ -1102,10 +1198,10 @@ export default function AdminBillingPage() {
                     <tr>
                       <th>User</th>
                       <th>Status</th>
-                      <th>Subscription ID</th>
-                      <th>Price ID</th>
-                      <th>Period End</th>
-                      <th>Cancel at End</th>
+                      <th>Term</th>
+                      <th>Days left</th>
+                      <th>Period end</th>
+                      <th>Cancel at end</th>
                     </tr>
                   </thead>
                   <tbody>
@@ -1117,11 +1213,15 @@ export default function AdminBillingPage() {
                         </td>
                         <td>
                           <span className={`tag ${STATUS_COLOR[sub.status] || 'is-light'}`}>
-                            {sub.status.replace('_', ' ')}
+                            {sub.status.replace(/_/g, ' ')}
                           </span>
                         </td>
-                        <td><code>{sub.stripe_subscription_id}</code></td>
-                        <td><code>{sub.stripe_price_id}</code></td>
+                        <td>{sub.term || '—'}</td>
+                        <td>
+                          <span style={{ fontVariantNumeric: 'tabular-nums' }}>
+                            {sub.days_remaining ?? '—'}
+                          </span>
+                        </td>
                         <td>{new Date(sub.current_period_end).toLocaleDateString()}</td>
                         <td>{sub.cancel_at_period_end ? <span className="tag is-warning is-light">Yes</span> : '—'}</td>
                       </tr>

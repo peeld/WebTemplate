@@ -1,5 +1,7 @@
+import json
 import logging
 import os
+import secrets
 from datetime import datetime, timezone as dt_utc, timedelta
 
 import stripe
@@ -13,9 +15,9 @@ from rest_framework.permissions import IsAuthenticated, IsAdminUser, AllowAny
 from rest_framework.response import Response
 from rest_framework.views import APIView
 
-from .license_auth import SubscriptionRequired, issue_license_token, verify_license_request
-from .models import LicenseKey, LicenseMachine, Product, ProductImage, ProductPrice, StripeCustomer, Subscription
-from .serializers import ProductSerializer, SubscriptionSerializer, AdminProductSerializer, AdminProductPriceSerializer, AdminSubscriptionSerializer, ProductImageSerializer
+from .license_auth import ACTIVE_STATUSES, SubscriptionRequired, generate_machine_secret, issue_license_token, verify_license_request, verify_machine_request
+from .models import InstallToken, LicenseKey, LicenseMachine, Product, ProductImage, ProductPrice, StripeCustomer, Subscription, SubscriptionItem
+from .serializers import ProductSerializer, SubscriptionSerializer, AdminProductSerializer, AdminProductPriceSerializer, AdminSubscriptionSerializer, AdminLicenseSerializer, ProductImageSerializer, UserLicenseSerializer
 from .signals import checkout_completed, subscription_activated, subscription_cancelled, payment_completed
 
 logger = logging.getLogger(__name__)
@@ -75,33 +77,49 @@ def _resolve_period_end(sub_dict):
     return anchor
 
 
-def _upsert_subscription_from_stripe(sc, stripe_sub):
-    """Write or update a local Subscription from a fully-retrieved Stripe Subscription object."""
-    raw = stripe_sub.to_dict()
-
+def _upsert_subscription_from_raw(sc, raw):
+    """Write or update a local Subscription and its SubscriptionItems from a raw Stripe dict."""
     items_data = raw.get('items', {}).get('data', [])
     if not items_data:
         raise ValueError(f'No items in subscription {raw.get("id")}')
 
-    price_raw  = items_data[0].get('price', {})
-    price_id   = price_raw.get('id')
-    product_id = price_raw.get('product')
-    if isinstance(product_id, dict):
-        product_id = product_id.get('id')
-
     period_end = _resolve_period_end(raw)
 
-    Subscription.objects.update_or_create(
-        customer=sc,
+    sub, _ = Subscription.objects.update_or_create(
+        stripe_subscription_id=raw['id'],
         defaults={
-            'stripe_subscription_id': raw['id'],
-            'stripe_price_id':        price_id,
-            'stripe_product_id':      product_id,
-            'status':                 raw['status'],
-            'current_period_end':     period_end,
-            'cancel_at_period_end':   raw.get('cancel_at_period_end', False),
+            'customer':            sc,
+            'status':              raw['status'],
+            'current_period_end':  period_end,
+            'cancel_at_period_end': raw.get('cancel_at_period_end', False),
         },
     )
+
+    seen_price_ids = set()
+    for item_data in items_data:
+        price_raw  = item_data.get('price', {})
+        price_id   = price_raw.get('id')
+        product_id = price_raw.get('product')
+        if isinstance(product_id, dict):
+            product_id = product_id.get('id')
+        if price_id:
+            SubscriptionItem.objects.update_or_create(
+                subscription=sub,
+                stripe_price_id=price_id,
+                defaults={
+                    'stripe_product_id': product_id or '',
+                    'quantity':          item_data.get('quantity', 1),
+                },
+            )
+            seen_price_ids.add(price_id)
+
+    sub.items.exclude(stripe_price_id__in=seen_price_ids).delete()
+    return sub
+
+
+def _upsert_subscription_from_stripe(sc, stripe_sub):
+    """Write or update a local Subscription and its items from a Stripe SDK object."""
+    return _upsert_subscription_from_raw(sc, stripe_sub.to_dict())
 
 
 def _get_or_create_stripe_customer(user, client):
@@ -212,15 +230,21 @@ class CheckoutView(APIView):
 
 
 class SubscriptionView(APIView):
-    """Return the current subscription for the authenticated user."""
+    """Return all active subscriptions for the authenticated user."""
     permission_classes = [IsAuthenticated]
 
     def get(self, request):
         try:
-            subscription = request.user.stripe_customer.subscription
-            return Response(SubscriptionSerializer(subscription).data)
-        except (StripeCustomer.DoesNotExist, Subscription.DoesNotExist):
-            return Response({'status': 'none'})
+            sc = request.user.stripe_customer
+        except StripeCustomer.DoesNotExist:
+            return Response([])
+        subs = (
+            sc.subscriptions
+            .prefetch_related('items')
+            .exclude(status__in=('canceled', 'incomplete_expired'))
+            .order_by('-updated_at')
+        )
+        return Response(SubscriptionSerializer(subs, many=True).data)
 
 
 class PortalView(APIView):
@@ -247,60 +271,112 @@ class PortalView(APIView):
 
 
 class CancelSubscriptionView(APIView):
-    """Cancel the user's subscription at period end."""
+    """Cancel a subscription at period end. Requires subscription_id in the request body."""
     permission_classes = [IsAuthenticated]
 
     def post(self, request):
+        subscription_id = request.data.get('subscription_id')
+        if not subscription_id:
+            return Response({'error': 'subscription_id is required.'}, status=400)
+
         try:
-            subscription = request.user.stripe_customer.subscription
-        except (StripeCustomer.DoesNotExist, Subscription.DoesNotExist):
-            return Response({'error': 'No active subscription found.'}, status=404)
+            subscription = Subscription.objects.get(
+                customer__user=request.user,
+                stripe_subscription_id=subscription_id,
+            )
+        except Subscription.DoesNotExist:
+            return Response({'error': 'Subscription not found.'}, status=404)
 
         if subscription.cancel_at_period_end:
             return Response({'error': 'Subscription is already set to cancel.'}, status=400)
 
         client = _stripe_client()
         try:
-            client.Subscription.modify(
-                subscription.stripe_subscription_id,
-                cancel_at_period_end=True,
-            )
+            client.Subscription.modify(subscription_id, cancel_at_period_end=True)
         except stripe.StripeError as e:
             logger.error('Failed to cancel subscription for user %s: %s', request.user.pk, e, exc_info=True)
             return Response({'error': 'Unable to cancel subscription.'}, status=502)
 
         subscription.cancel_at_period_end = True
         subscription.save(update_fields=['cancel_at_period_end', 'updated_at'])
-        logger.info('Subscription %s set to cancel at period end for user %s', subscription.stripe_subscription_id, request.user.pk)
+        logger.info('Subscription %s set to cancel at period end for user %s', subscription_id, request.user.pk)
         return Response(SubscriptionSerializer(subscription).data)
 
 
 class ResumeSubscriptionView(APIView):
-    """Undo a pending cancellation."""
+    """Undo a pending cancellation. Requires subscription_id in the request body."""
     permission_classes = [IsAuthenticated]
 
     def post(self, request):
+        subscription_id = request.data.get('subscription_id')
+        if not subscription_id:
+            return Response({'error': 'subscription_id is required.'}, status=400)
+
         try:
-            subscription = request.user.stripe_customer.subscription
-        except (StripeCustomer.DoesNotExist, Subscription.DoesNotExist):
-            return Response({'error': 'No subscription found.'}, status=404)
+            subscription = Subscription.objects.get(
+                customer__user=request.user,
+                stripe_subscription_id=subscription_id,
+            )
+        except Subscription.DoesNotExist:
+            return Response({'error': 'Subscription not found.'}, status=404)
 
         if not subscription.cancel_at_period_end:
             return Response({'error': 'Subscription is not scheduled to cancel.'}, status=400)
 
         client = _stripe_client()
         try:
-            client.Subscription.modify(
-                subscription.stripe_subscription_id,
-                cancel_at_period_end=False,
-            )
+            client.Subscription.modify(subscription_id, cancel_at_period_end=False)
         except stripe.StripeError as e:
             logger.error('Failed to resume subscription for user %s: %s', request.user.pk, e, exc_info=True)
             return Response({'error': 'Unable to resume subscription.'}, status=502)
 
         subscription.cancel_at_period_end = False
         subscription.save(update_fields=['cancel_at_period_end', 'updated_at'])
-        logger.info('Subscription %s resumption confirmed for user %s', subscription.stripe_subscription_id, request.user.pk)
+        logger.info('Subscription %s resumption confirmed for user %s', subscription_id, request.user.pk)
+        return Response(SubscriptionSerializer(subscription).data)
+
+
+class ChangeSubscriptionView(APIView):
+    """Swap a subscription to a different price (plan change with proration)."""
+    permission_classes = [IsAuthenticated]
+
+    def post(self, request):
+        subscription_id = request.data.get('subscription_id')
+        price_id        = request.data.get('price_id')
+
+        if not subscription_id or not price_id:
+            return Response({'error': 'subscription_id and price_id are required.'}, status=400)
+
+        try:
+            subscription = Subscription.objects.get(
+                customer__user=request.user,
+                stripe_subscription_id=subscription_id,
+            )
+        except Subscription.DoesNotExist:
+            return Response({'error': 'Subscription not found.'}, status=404)
+
+        if not ProductPrice.objects.filter(stripe_price_id=price_id, price_type='recurring', is_active=True).exists():
+            return Response({'error': 'Invalid plan.'}, status=400)
+
+        client = _stripe_client()
+        try:
+            stripe_sub = client.Subscription.retrieve(subscription_id)
+            existing_items = stripe_sub['items']['data']
+            new_items = [{'id': item['id'], 'deleted': True} for item in existing_items]
+            new_items.append({'price': price_id})
+            client.Subscription.modify(
+                subscription_id,
+                items=new_items,
+                proration_behavior='create_prorations',
+            )
+            full = client.Subscription.retrieve(subscription_id, expand=['items.data.price'])
+            _upsert_subscription_from_stripe(subscription.customer, full)
+        except stripe.StripeError as e:
+            logger.error('Failed to change subscription for user %s: %s', request.user.pk, e, exc_info=True)
+            return Response({'error': 'Unable to change plan.'}, status=502)
+
+        subscription.refresh_from_db()
+        logger.info('Subscription %s changed to price %s for user %s', subscription_id, price_id, request.user.pk)
         return Response(SubscriptionSerializer(subscription).data)
 
 
@@ -432,15 +508,23 @@ class CartExecuteView(APIView):
         if one_time_items:
             total    = sum(p.amount * qty for p, qty in one_time_items)
             currency = one_time_items[0][0].currency
+            grants   = [
+                {'slug': p.product.slug, 'days': p.days_granted}
+                for p, _qty in one_time_items
+                if p.days_granted
+            ]
+            pi_params = {
+                'amount':         total,
+                'currency':       currency,
+                'customer':       customer_id,
+                'payment_method': payment_method,
+                'confirm':        True,
+                'off_session':    True,
+            }
+            if grants:
+                pi_params['metadata'] = {'grants': json.dumps(grants)}
             try:
-                pi = client.PaymentIntent.create(
-                    amount=total,
-                    currency=currency,
-                    customer=customer_id,
-                    payment_method=payment_method,
-                    confirm=True,
-                    off_session=True,
-                )
+                pi = client.PaymentIntent.create(**pi_params)
                 transaction_count += 1
                 logger.info('PaymentIntent %s created for user %s (amount=%d)', pi.id, request.user.pk, total)
             except stripe.CardError as e:
@@ -467,8 +551,10 @@ class CartExecuteView(APIView):
                 if sc is not None:
                     try:
                         full = client.Subscription.retrieve(sub.id, expand=['items.data.price'])
-                        _upsert_subscription_from_stripe(sc, full)
+                        local_sub = _upsert_subscription_from_stripe(sc, full)
                         logger.info('Subscription %s mirrored to local DB for user %s', sub.id, request.user.pk)
+                        if local_sub.status in ACTIVE_STATUSES:
+                            subscription_activated.send(sender=self.__class__, user=sc.user, subscription=local_sub)
                     except Exception as e:
                         logger.error('CartExecute: failed to mirror subscription %s to local DB: %s', sub.id, e, exc_info=True)
             except stripe.StripeError as e:
@@ -510,35 +596,37 @@ class WebhookView(APIView):
 
         logger.info('Stripe webhook received: %s', event_type)
 
+        event_id = event['id']
+
         if event_type == 'checkout.session.completed':
             try:
                 self._handle_checkout_completed(data)
             except Exception as e:
-                logger.error('Error in _handle_checkout_completed for event %s: %s', event.get('id'), e, exc_info=True)
+                logger.error('Error in _handle_checkout_completed for event %s: %s', event_id, e, exc_info=True)
         elif event_type in ('customer.subscription.created', 'customer.subscription.updated'):
             try:
                 self._handle_subscription_upsert(data)
             except Exception as e:
-                logger.error('Error in _handle_subscription_upsert for event %s: %s', event.get('id'), e, exc_info=True)
+                logger.error('Error in _handle_subscription_upsert for event %s: %s', event_id, e, exc_info=True)
         elif event_type == 'customer.subscription.deleted':
             try:
                 self._handle_subscription_deleted(data)
             except Exception as e:
-                logger.error('Error in _handle_subscription_deleted for event %s: %s', event.get('id'), e, exc_info=True)
+                logger.error('Error in _handle_subscription_deleted for event %s: %s', event_id, e, exc_info=True)
         elif event_type == 'payment_intent.succeeded':
             try:
                 self._handle_payment_intent_succeeded(data)
             except Exception as e:
-                logger.error('Error in _handle_payment_intent_succeeded for event %s: %s', event.get('id'), e, exc_info=True)
+                logger.error('Error in _handle_payment_intent_succeeded for event %s: %s', event_id, e, exc_info=True)
         elif event_type == 'payment_intent.payment_failed':
             logger.warning('payment_intent.payment_failed: pi=%s customer=%s', data.get('id'), data.get('customer'))
         elif event_type == 'invoice.payment_action_required':
             try:
                 self._handle_invoice_payment_action_required(data)
             except Exception as e:
-                logger.error('Error in _handle_invoice_payment_action_required for event %s: %s', event.get('id'), e, exc_info=True)
+                logger.error('Error in _handle_invoice_payment_action_required for event %s: %s', event_id, e, exc_info=True)
         else:
-            logger.debug('Stripe webhook event not handled: %s (event_id=%s)', event_type, event.get('id'))
+            logger.debug('Stripe webhook event not handled: %s (event_id=%s)', event_type, event_id)
 
         return Response({'status': 'ok'})
 
@@ -560,34 +648,18 @@ class WebhookView(APIView):
             return
 
         try:
-            period_end = _resolve_period_end(sub)
+            subscription = _upsert_subscription_from_raw(sc, sub)
         except ValueError as e:
             logger.error('subscription upsert: %s for subscription %s', e, sub.get('id'))
             return
-        try:
-            price_id   = sub['items']['data'][0]['price']['id']
-            product_id = sub['items']['data'][0]['price']['product']
-        except (KeyError, IndexError) as e:
-            logger.error('subscription upsert: malformed items for subscription %s: %s', sub.get('id'), e, exc_info=True)
-            return
-
-        try:
-            subscription, _ = Subscription.objects.update_or_create(
-                customer=sc,
-                defaults={
-                    'stripe_subscription_id': sub['id'],
-                    'stripe_price_id':        price_id,
-                    'stripe_product_id':      product_id,
-                    'status':                 sub['status'],
-                    'current_period_end':     period_end,
-                    'cancel_at_period_end':   sub['cancel_at_period_end'],
-                },
-            )
         except Exception as e:
             logger.error('subscription upsert: DB error for subscription %s: %s', sub.get('id'), e, exc_info=True)
             return
 
-        subscription_activated.send(sender=self.__class__, user=sc.user, subscription=subscription)
+        if subscription.status in ACTIVE_STATUSES:
+            subscription_activated.send(sender=self.__class__, user=sc.user, subscription=subscription)
+        elif subscription.status in ('canceled', 'unpaid', 'paused'):
+            subscription_cancelled.send(sender=self.__class__, user=sc.user, subscription=subscription)
         logger.info('Subscription %s upserted for user %s (status=%s)', sub['id'], sc.user.pk, sub['status'])
 
     def _handle_subscription_deleted(self, sub):
@@ -617,6 +689,47 @@ class WebhookView(APIView):
         except StripeCustomer.DoesNotExist:
             logger.warning('payment_intent.succeeded: no StripeCustomer for %s', customer_id)
             return
+
+        grants_json = (payment_intent.get('metadata') or {}).get('grants')
+        if grants_json:
+            try:
+                grants = json.loads(grants_json)
+                for grant in grants:
+                    slug = grant.get('slug')
+                    days = grant.get('days')
+                    if not slug or not days:
+                        continue
+                    try:
+                        product = Product.objects.get(slug=slug)
+                    except Product.DoesNotExist:
+                        logger.warning('payment_intent.succeeded: product slug %r not found for day grant', slug)
+                        continue
+                    now = timezone.now()
+                    lic, created = LicenseKey.objects.get_or_create(
+                        user=sc.user,
+                        product=product,
+                        defaults={
+                            'expires_at':       now + timedelta(days=days),
+                            'max_machines':     getattr(settings, 'LICENSE_DEFAULT_MAX_MACHINES', 1),
+                            'offline_ttl_days': getattr(settings, 'LICENSE_DEFAULT_OFFLINE_TTL_DAYS', 30),
+                        },
+                    )
+                    if not created:
+                        # Stack days on top of existing expiry; if expired or unset, start from now.
+                        base = lic.expires_at if (lic.expires_at and lic.expires_at > now) else now
+                        update_fields = ['expires_at']
+                        lic.expires_at = base + timedelta(days=days)
+                        if not lic.is_active:
+                            lic.is_active = True
+                            update_fields.append('is_active')
+                        lic.save(update_fields=update_fields)
+                    logger.info(
+                        'Credited %d days to license for user %s product %s (expires_at=%s)',
+                        days, sc.user.pk, slug, lic.expires_at,
+                    )
+            except (json.JSONDecodeError, TypeError) as e:
+                logger.error('payment_intent.succeeded: failed to parse grants metadata: %s', e)
+
         payment_completed.send(sender=self.__class__, user=sc.user, payment_intent=payment_intent)
         logger.info('payment_completed signal fired for user %s (pi=%s)', sc.user.pk, payment_intent.get('id'))
 
@@ -678,6 +791,19 @@ class AdminSubscriptionListView(APIView):
         return Response(AdminSubscriptionSerializer(subs, many=True).data)
 
 
+class AdminLicenseListView(APIView):
+    permission_classes = [IsAdminUser]
+
+    def get(self, request):
+        licenses = (
+            LicenseKey.objects
+            .select_related('user', 'product', 'subscription')
+            .prefetch_related('machines')
+            .order_by('-created_at')
+        )
+        return Response(AdminLicenseSerializer(licenses, many=True).data)
+
+
 class AdminSubscriptionSyncView(APIView):
     """Check and fix sync state between Stripe subscriptions and the local DB."""
     permission_classes = [IsAdminUser]
@@ -705,17 +831,13 @@ class AdminSubscriptionSyncView(APIView):
         issues = []
         for sc in local_customers:
             customer_stripe = stripe_by_customer.get(sc.stripe_customer_id, [])
-            active_stripe   = [s for s in customer_stripe if s['status'] not in ('canceled', 'incomplete_expired')]
+            stripe_by_id    = {s['id']: s for s in customer_stripe}
+            active_stripe   = {s['id'] for s in customer_stripe if s['status'] not in ('canceled', 'incomplete_expired')}
 
-            try:
-                local_sub = sc.subscription
-                has_local = True
-            except Subscription.DoesNotExist:
-                has_local = False
-                local_sub = None
-
-            if has_local:
-                stripe_match = stripe_subs.get(local_sub.stripe_subscription_id)
+            local_sub_ids = set()
+            for local_sub in sc.subscriptions.all():
+                local_sub_ids.add(local_sub.stripe_subscription_id)
+                stripe_match = stripe_by_id.get(local_sub.stripe_subscription_id)
                 if stripe_match is None:
                     issues.append({
                         'type': 'orphaned',
@@ -734,25 +856,16 @@ class AdminSubscriptionSyncView(APIView):
                         'local_status': local_sub.status,
                         'stripe_status': stripe_match['status'],
                     })
-                for s in active_stripe:
-                    if s['id'] != local_sub.stripe_subscription_id:
-                        issues.append({
-                            'type': 'untracked',
-                            'description': 'Active Stripe subscription not tracked locally.',
-                            'user_email': sc.user.email,
-                            'stripe_subscription_id': s['id'],
-                            'local_status': None,
-                            'stripe_status': s['status'],
-                        })
-            else:
-                for s in active_stripe:
+
+            for sub_id in active_stripe:
+                if sub_id not in local_sub_ids:
                     issues.append({
                         'type': 'missing_local',
                         'description': 'Active Stripe subscription has no local DB record.',
                         'user_email': sc.user.email,
-                        'stripe_subscription_id': s['id'],
+                        'stripe_subscription_id': sub_id,
                         'local_status': None,
-                        'stripe_status': s['status'],
+                        'stripe_status': stripe_by_id[sub_id]['status'],
                     })
 
         return issues
@@ -765,7 +878,7 @@ class AdminSubscriptionSyncView(APIView):
             logger.error('AdminSubscriptionSync GET: Stripe fetch failed: %s', e, exc_info=True)
             return Response({'error': 'Unable to fetch subscriptions from Stripe.'}, status=502)
 
-        local_customers = StripeCustomer.objects.select_related('user', 'subscription').all()
+        local_customers = StripeCustomer.objects.select_related('user').prefetch_related('subscriptions').all()
         issues = self._build_issues(stripe_subs, local_customers)
 
         return Response({
@@ -787,33 +900,26 @@ class AdminSubscriptionSyncView(APIView):
             cid = sub['customer'] if isinstance(sub['customer'], str) else sub['customer']['id']
             stripe_by_customer.setdefault(cid, []).append(sub)
 
-        local_customers = StripeCustomer.objects.select_related('user', 'subscription').all()
+        local_customers = StripeCustomer.objects.select_related('user').prefetch_related('subscriptions').all()
         fixed      = 0
         fix_errors = []
         debug_rows = []
 
         for sc in local_customers:
             customer_stripe = stripe_by_customer.get(sc.stripe_customer_id, [])
-            active_stripe   = [s for s in customer_stripe if s['status'] not in ('canceled', 'incomplete_expired')]
+            stripe_by_id    = {s['id']: s for s in customer_stripe}
+            active_stripe   = {s['id'] for s in customer_stripe if s['status'] not in ('canceled', 'incomplete_expired')}
 
-            try:
-                local_sub = sc.subscription
-                has_local = True
-            except Subscription.DoesNotExist:
-                has_local = False
-                local_sub = None
-
-            row = {
-                'stripe_customer_id': sc.stripe_customer_id,
-                'user_email': sc.user.email,
-                'stripe_subs_for_customer': len(customer_stripe),
-                'active_stripe_subs': len(active_stripe),
-                'has_local': has_local,
-                'action': 'none',
-            }
-
-            if has_local:
-                stripe_match = stripe_subs.get(local_sub.stripe_subscription_id)
+            local_sub_ids = set()
+            for local_sub in sc.subscriptions.all():
+                local_sub_ids.add(local_sub.stripe_subscription_id)
+                row = {
+                    'stripe_customer_id': sc.stripe_customer_id,
+                    'user_email':         sc.user.email,
+                    'subscription_id':    local_sub.stripe_subscription_id,
+                    'action':             'none',
+                }
+                stripe_match = stripe_by_id.get(local_sub.stripe_subscription_id)
                 if stripe_match is None:
                     local_sub.status = 'canceled'
                     local_sub.save(update_fields=['status', 'updated_at'])
@@ -822,11 +928,12 @@ class AdminSubscriptionSyncView(APIView):
                     logger.info('AdminSubscriptionSync: marked orphaned sub %s as canceled for user %s', local_sub.stripe_subscription_id, sc.user.pk)
                 elif stripe_match['status'] != local_sub.status:
                     try:
-                        full = client.Subscription.retrieve(
-                            local_sub.stripe_subscription_id,
-                            expand=['items.data.price'],
-                        )
-                        _upsert_subscription_from_stripe(sc, full)
+                        full    = client.Subscription.retrieve(local_sub.stripe_subscription_id, expand=['items.data.price'])
+                        updated = _upsert_subscription_from_stripe(sc, full)
+                        if updated.status in ACTIVE_STATUSES:
+                            subscription_activated.send(sender=self.__class__, user=sc.user, subscription=updated)
+                        elif updated.status in ('canceled', 'unpaid', 'paused'):
+                            subscription_cancelled.send(sender=self.__class__, user=sc.user, subscription=updated)
                         fixed += 1
                         row['action'] = 'status_updated'
                         logger.info('AdminSubscriptionSync: updated sub %s for user %s', local_sub.stripe_subscription_id, sc.user.pk)
@@ -836,27 +943,29 @@ class AdminSubscriptionSyncView(APIView):
                         logger.error('AdminSubscriptionSync: update failed for sub %s: %s', local_sub.stripe_subscription_id, e, exc_info=True)
                 else:
                     row['action'] = f'no_change (local={local_sub.status} matches stripe)'
-            else:
-                if active_stripe:
+                debug_rows.append(row)
+
+            for sub_id in active_stripe:
+                if sub_id not in local_sub_ids:
+                    row = {
+                        'stripe_customer_id': sc.stripe_customer_id,
+                        'user_email':         sc.user.email,
+                        'subscription_id':    sub_id,
+                        'action':             'none',
+                    }
                     try:
-                        candidate_id = active_stripe[0]['id']
-                        row['candidate_id'] = candidate_id
-                        full = client.Subscription.retrieve(
-                            candidate_id,
-                            expand=['items.data.price'],
-                        )
-                        _upsert_subscription_from_stripe(sc, full)
+                        full    = client.Subscription.retrieve(sub_id, expand=['items.data.price'])
+                        created = _upsert_subscription_from_stripe(sc, full)
+                        if created.status in ACTIVE_STATUSES:
+                            subscription_activated.send(sender=self.__class__, user=sc.user, subscription=created)
                         fixed += 1
                         row['action'] = 'created'
                         logger.info('AdminSubscriptionSync: created local record for sub %s user %s', full.id, sc.user.pk)
                     except Exception as e:
-                        fix_errors.append({'subscription': candidate_id, 'error': str(e)})
+                        fix_errors.append({'subscription': sub_id, 'error': str(e)})
                         row['action'] = f'error: {e}'
-                        logger.error('AdminSubscriptionSync: failed to create record for sub %s: %s', candidate_id, e, exc_info=True)
-                else:
-                    row['action'] = 'no_active_stripe_subs'
-
-            debug_rows.append(row)
+                        logger.error('AdminSubscriptionSync: failed to create record for sub %s: %s', sub_id, e, exc_info=True)
+                    debug_rows.append(row)
 
         return Response({'fixed': fixed, 'errors': fix_errors, 'debug': debug_rows})
 
@@ -1033,6 +1142,7 @@ class LicenseActivateView(APIView):
                 return Response({'detail': 'This machine has been deactivated.'}, status=403)
             if label:
                 machine.label = label
+            machine.machine_secret = generate_machine_secret()
             machine.save()  # refreshes last_seen via auto_now
         except LicenseMachine.DoesNotExist:
             active_count = lic.machines.filter(is_active=True).count()
@@ -1052,15 +1162,17 @@ class LicenseActivateView(APIView):
                 license=lic,
                 machine_id_hash=machine_id_hash,
                 label=label,
+                machine_secret=generate_machine_secret(),
             )
             logger.info('Activated machine %s on license %s', machine_id_hash[:8], lic.key)
 
         token, expires_at = issue_license_token(lic, machine_id_hash)
         return Response({
-            'token':         token,
-            'expires_at':    expires_at.isoformat(),
-            'machines_used': lic.machines.filter(is_active=True).count(),
-            'max_machines':  lic.max_machines,
+            'token':          token,
+            'expires_at':     expires_at.isoformat(),
+            'machines_used':  lic.machines.filter(is_active=True).count(),
+            'max_machines':   lic.max_machines,
+            'machine_secret': machine.machine_secret,
         })
 
 
@@ -1085,6 +1197,22 @@ class LicenseCheckinView(APIView):
 
         machine.save()  # refreshes last_seen
         token, expires_at = issue_license_token(lic, machine_id_hash)
+        return Response({'token': token, 'expires_at': expires_at.isoformat()})
+
+
+@method_decorator(csrf_exempt, name='dispatch')
+class MachineCheckinView(APIView):
+    """
+    Check-in using machine_secret only — client does not need to store the license key UUID.
+    Signs requests with the machine_secret returned at activation.
+    Returns a fresh offline JWT.
+    """
+    permission_classes = [AllowAny]
+
+    def post(self, request):
+        lic, machine = verify_machine_request(request)
+        machine.save()  # refreshes last_seen
+        token, expires_at = issue_license_token(lic, machine.machine_id_hash)
         return Response({'token': token, 'expires_at': expires_at.isoformat()})
 
 
@@ -1128,3 +1256,68 @@ class LicenseMachineDeactivateView(APIView):
         machine.save(update_fields=['is_active'])
         logger.info('User %s deactivated machine %s', request.user.pk, machine_id_hash[:8])
         return Response(status=204)
+
+
+class LicenseListView(APIView):
+    """List the authenticated user's active licenses."""
+    permission_classes = [IsAuthenticated]
+
+    def get(self, request):
+        licenses = (
+            LicenseKey.objects
+            .filter(user=request.user, is_active=True)
+            .select_related('product')
+            .prefetch_related('machines')
+        )
+        return Response(UserLicenseSerializer(licenses, many=True).data)
+
+
+def _generate_install_token():
+    raw = secrets.token_hex(8).upper()
+    return f'{raw[:4]}-{raw[4:8]}-{raw[8:12]}-{raw[12:16]}'
+
+
+class InstallTokenCreateView(APIView):
+    """Generate a single-use install token for a license. The client exchanges it for the real key."""
+    permission_classes = [IsAuthenticated]
+
+    def post(self, request, pk):
+        license = get_object_or_404(LicenseKey, pk=pk, user=request.user, is_active=True)
+        token      = _generate_install_token()
+        expires_at = timezone.now() + timedelta(hours=24)
+        InstallToken.objects.create(token=token, license=license, expires_at=expires_at)
+        logger.info('Install token created for license %s (user %s)', license.pk, request.user.pk)
+        return Response({'token': token, 'expires_at': expires_at.isoformat()})
+
+
+@method_decorator(csrf_exempt, name='dispatch')
+class InstallTokenExchangeView(APIView):
+    """Exchange a single-use install token for the license key. No authentication required."""
+    permission_classes = [AllowAny]
+
+    def post(self, request):
+        token_str = (request.data.get('token') or '').strip().upper()
+        if not token_str:
+            return Response({'error': 'token is required.'}, status=400)
+
+        try:
+            install_token = InstallToken.objects.select_related('license__product').get(token=token_str)
+        except InstallToken.DoesNotExist:
+            return Response({'error': 'Invalid or expired token.'}, status=400)
+
+        if install_token.used_at is not None:
+            return Response({'error': 'Token has already been used.'}, status=400)
+
+        if install_token.expires_at < timezone.now():
+            return Response({'error': 'Token has expired.'}, status=400)
+
+        install_token.used_at = timezone.now()
+        install_token.save(update_fields=['used_at'])
+
+        lic = install_token.license
+        logger.info('Install token exchanged for license %s (user %s)', lic.pk, lic.user_id)
+        return Response({
+            'license_key':  str(lic.key),
+            'product_slug': lic.product.slug,
+            'product_name': lic.product.name,
+        })

@@ -75,7 +75,10 @@ export default function StoreProductCard({ name, description, thumbnail, feature
                   <span className="is-size-4 has-text-weight-bold has-text-primary">
                     {formatPrice(activeOne.amount, activeOne.currency)}
                   </span>
-                  <span className="is-size-7 has-text-grey ml-1">one-time</span>
+                  {activeOne.days_granted
+                    ? <span className="is-size-7 has-text-grey ml-1">{activeOne.days_granted} days</span>
+                    : <span className="is-size-7 has-text-grey ml-1">one-time</span>
+                  }
                 </div>
                 <button
                   className={`button is-small${added === activeOne.stripe_price_id ? ' is-success' : ' is-primary'}${activeRecurring.length > 0 ? ' is-outlined' : ''}`}
@@ -85,7 +88,11 @@ export default function StoreProductCard({ name, description, thumbnail, feature
                 >
                   {added === activeOne.stripe_price_id
                     ? 'Added!'
-                    : fulfillment_type === 'physical' ? 'Buy & Ship' : 'Add to Cart'}
+                    : fulfillment_type === 'physical'
+                      ? 'Buy & Ship'
+                      : activeOne.days_granted
+                        ? `Buy ${activeOne.days_granted} Days`
+                        : 'Add to Cart'}
                 </button>
               </div>
             </div>

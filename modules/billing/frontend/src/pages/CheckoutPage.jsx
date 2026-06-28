@@ -226,7 +226,14 @@ export default function CheckoutPage() {
                   <p className="has-text-weight-semibold mb-2 is-size-6">One-time</p>
                   {oneTimeItems.map(({ product, price, quantity }) => (
                     <div key={price.stripe_price_id} className="is-flex is-justify-content-space-between mb-1">
-                      <span className="is-size-6">{product.name}{quantity > 1 ? ` × ${quantity}` : ''}</span>
+                      <span className="is-size-6">
+                        {product.name}{quantity > 1 ? ` × ${quantity}` : ''}
+                        {price.days_granted && (
+                          <span className="is-size-7 has-text-grey ml-1">
+                            ({price.days_granted * quantity} days)
+                          </span>
+                        )}
+                      </span>
                       <span className="is-size-6">{formatPrice(price.amount * quantity, price.currency)}</span>
                     </div>
                   ))}

@@ -1,4 +1,5 @@
 done/
+modules/billing/cpp/vs_build
 log.txt
 core/backend/db.sqlite3
 core/backend/*/

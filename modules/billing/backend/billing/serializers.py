@@ -1,5 +1,6 @@
+from django.utils import timezone
 from rest_framework import serializers
-from .models import Product, ProductImage, ProductPrice, Subscription
+from .models import InstallToken, LicenseKey, Product, ProductImage, ProductPrice, Subscription, SubscriptionItem
 
 
 class ProductImageSerializer(serializers.ModelSerializer):
@@ -22,7 +23,7 @@ class ProductImageSerializer(serializers.ModelSerializer):
 class ProductPriceSerializer(serializers.ModelSerializer):
     class Meta:
         model  = ProductPrice
-        fields = ['id', 'stripe_price_id', 'amount', 'currency', 'price_type', 'interval', 'is_active']
+        fields = ['id', 'stripe_price_id', 'amount', 'currency', 'price_type', 'interval', 'days_granted', 'is_active']
 
 
 class ProductSerializer(serializers.ModelSerializer):
@@ -33,16 +34,26 @@ class ProductSerializer(serializers.ModelSerializer):
         fields = ['id', 'name', 'slug', 'description', 'thumbnail', 'features', 'fulfillment_type', 'prices']
 
 
-class SubscriptionSerializer(serializers.ModelSerializer):
+class SubscriptionItemSerializer(serializers.ModelSerializer):
     product_name = serializers.SerializerMethodField()
+
+    class Meta:
+        model  = SubscriptionItem
+        fields = ['stripe_price_id', 'stripe_product_id', 'quantity', 'product_name']
+
+    def get_product_name(self, obj):
+        product = Product.objects.filter(stripe_product_id=obj.stripe_product_id).first()
+        return product.name if product else None
+
+
+class SubscriptionSerializer(serializers.ModelSerializer):
+    items = SubscriptionItemSerializer(many=True, read_only=True)
 
     class Meta:
         model  = Subscription
         fields = [
             'stripe_subscription_id',
-            'stripe_price_id',
-            'stripe_product_id',
-            'product_name',
+            'items',
             'status',
             'current_period_end',
             'cancel_at_period_end',
@@ -50,15 +61,11 @@ class SubscriptionSerializer(serializers.ModelSerializer):
         ]
         read_only_fields = fields
 
-    def get_product_name(self, obj):
-        product = Product.objects.filter(stripe_product_id=obj.stripe_product_id).first()
-        return product.name if product else None
-
 
 class AdminProductPriceSerializer(serializers.ModelSerializer):
     class Meta:
         model            = ProductPrice
-        fields           = ['id', 'stripe_price_id', 'amount', 'currency', 'price_type', 'interval', 'is_active']
+        fields           = ['id', 'stripe_price_id', 'amount', 'currency', 'price_type', 'interval', 'days_granted', 'is_active']
         read_only_fields = ['stripe_price_id']
 
     def validate(self, data):
@@ -90,8 +97,11 @@ class AdminProductSerializer(serializers.ModelSerializer):
 
 
 class AdminSubscriptionSerializer(serializers.ModelSerializer):
-    user_email = serializers.CharField(source='customer.user.email', read_only=True)
-    username   = serializers.CharField(source='customer.user.username', read_only=True)
+    user_email     = serializers.CharField(source='customer.user.email', read_only=True)
+    username       = serializers.CharField(source='customer.user.username', read_only=True)
+    items          = SubscriptionItemSerializer(many=True, read_only=True)
+    term           = serializers.SerializerMethodField()
+    days_remaining = serializers.SerializerMethodField()
 
     class Meta:
         model  = Subscription
@@ -100,10 +110,62 @@ class AdminSubscriptionSerializer(serializers.ModelSerializer):
             'user_email',
             'username',
             'stripe_subscription_id',
-            'stripe_price_id',
-            'stripe_product_id',
+            'items',
             'status',
+            'term',
+            'days_remaining',
             'current_period_end',
             'cancel_at_period_end',
             'updated_at',
         ]
+
+    def get_term(self, obj):
+        price_ids = [item.stripe_price_id for item in obj.items.all()]
+        if not price_ids:
+            return None
+        intervals = list(
+            ProductPrice.objects
+            .filter(stripe_price_id__in=price_ids)
+            .values_list('interval', flat=True)
+            .distinct()
+        )
+        labels = {'week': 'Weekly', 'month': 'Monthly', 'year': 'Annual'}
+        return ', '.join(labels.get(i, i) for i in intervals) or None
+
+    def get_days_remaining(self, obj):
+        return max((obj.current_period_end - timezone.now()).days, 0)
+
+
+class UserLicenseSerializer(serializers.ModelSerializer):
+    product_name  = serializers.CharField(source='product.name', read_only=True)
+    product_slug  = serializers.CharField(source='product.slug', read_only=True)
+    machines_used = serializers.SerializerMethodField()
+
+    class Meta:
+        model  = LicenseKey
+        fields = ['id', 'product_name', 'product_slug', 'is_active', 'expires_at', 'max_machines', 'machines_used']
+
+    def get_machines_used(self, obj):
+        return obj.machines.filter(is_active=True).count()
+
+
+class AdminLicenseSerializer(serializers.ModelSerializer):
+    user_email          = serializers.CharField(source='user.email', read_only=True)
+    username            = serializers.CharField(source='user.username', read_only=True)
+    product_name        = serializers.CharField(source='product.name', read_only=True)
+    machines_used       = serializers.SerializerMethodField()
+    subscription_status = serializers.SerializerMethodField()
+
+    class Meta:
+        model  = LicenseKey
+        fields = [
+            'id', 'user_email', 'username', 'product_name',
+            'key', 'is_active', 'expires_at', 'max_machines', 'machines_used',
+            'offline_ttl_days', 'subscription_status', 'created_at',
+        ]
+
+    def get_machines_used(self, obj):
+        return obj.machines.filter(is_active=True).count()
+
+    def get_subscription_status(self, obj):
+        return obj.subscription.status if obj.subscription else None

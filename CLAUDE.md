@@ -37,4 +37,6 @@ For information about how modules are set up check ARCHITECTURE.md here are some
 10. **Each module is a git submodule.** Pin versions; do not use floating HEAD in production.
 11. **Run `install.py` for all module changes.** Do not manually pip-install or npm-install module packages.
 
-## Sentry
+If the user asks a question, answer the question then suggest changes rather than directly editing code. 
+For example "can we change a to b?" is a question that you should evaluate and answer rather than actually
+doing the task.  "Change a to b" is a statement that can be directly implemented.

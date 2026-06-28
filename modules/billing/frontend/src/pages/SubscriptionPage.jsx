@@ -33,7 +33,7 @@ export default function SubscriptionPage() {
           setError(data.detail || data.error || 'Failed to load subscription.');
           return;
         }
-        setSub(data);
+        setSub(data[0] || null);
       } catch {
         setError('Failed to load subscription.');
       } finally {
@@ -99,7 +99,7 @@ export default function SubscriptionPage() {
 
             <p className="mb-1">
               <span className="has-text-grey">Price ID:</span>{' '}
-              <code>{sub.stripe_price_id}</code>
+              <code>{sub.items?.[0]?.stripe_price_id}</code>
             </p>
 
             <p className="mb-4">
