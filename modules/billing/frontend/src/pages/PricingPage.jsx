@@ -4,11 +4,13 @@ import { addBreadcrumb } from '@core/frontend/utils/logger';
 import { getProducts } from '../api.js';
 import { useCart } from '../context/CartContext.jsx';
 import PricingCard from '../components/PricingCard.jsx';
+import StoreProductCard from '../components/StoreProductCard.jsx';
 
-const ALL_INTERVALS = [
-  { value: 'week',  label: 'Weekly' },
-  { value: 'month', label: 'Monthly' },
-  { value: 'year',  label: 'Annual' },
+
+const FILTERS = [
+  { value: 'all',      label: 'All' },
+  { value: 'digital',  label: 'Digital' },
+  { value: 'physical', label: 'Physical' },
 ];
 
 export default function PricingPage() {
@@ -16,6 +18,8 @@ export default function PricingPage() {
   const [error, setError]                       = useState(null);
   const [loading, setLoading]                   = useState(true);
   const [selectedInterval, setSelectedInterval] = useState('month');
+  const [filter, setFilter]     = useState('all');
+
 
   const { addToCart, cartCount } = useCart();
 
@@ -35,14 +39,13 @@ export default function PricingPage() {
     addToCart(product, price);
   }
 
-  const availableIntervals = ALL_INTERVALS.filter(iv =>
-    products.some(p =>
-      Array.isArray(p.prices) &&
-      p.prices.some(pr => pr.price_type === 'recurring' && pr.interval === iv.value && pr.is_active)
-    )
-  );
+  const hasPhysical = products.some(p => p.fulfillment_type === 'physical');
+  const hasDigital  = products.some(p => p.fulfillment_type === 'digital');
+  const showFilter  = hasPhysical && hasDigital;
 
-  const showToggle = availableIntervals.length > 1;
+  const visible = filter === 'all'
+    ? products
+    : products.filter(p => p.fulfillment_type === filter);
 
   return (
     <section className="section">
@@ -64,32 +67,31 @@ export default function PricingPage() {
           <p className="has-text-grey has-text-centered">No plans available yet.</p>
         )}
 
-        {!loading && showToggle && (
+        {!loading && showFilter && (
           <div className="has-text-centered mb-5">
             <div className="buttons has-addons is-centered">
-              {availableIntervals.map(iv => (
+              {FILTERS.map(f => (
                 <button
-                  key={iv.value}
-                  className={`button${selectedInterval === iv.value ? ' is-primary is-selected' : ''}`}
-                  onClick={() => setSelectedInterval(iv.value)}
+                  key={f.value}
+                  className={`button${filter === f.value ? ' is-primary is-selected' : ''}`}
+                  onClick={() => setFilter(f.value)}
                 >
-                  {iv.label}
+                  {f.label}
                 </button>
               ))}
             </div>
           </div>
         )}
 
-        {!loading && products.length > 0 && (
+        {!loading && visible.length > 0 && (
           <div className="columns is-multiline is-centered">
-            {products.map(product => (
+            {visible.map(product => (
               <div
                 key={product.id}
                 className={`column${products.length === 1 ? ' is-half' : ' is-one-third'}`}
               >
-                <PricingCard
+                <StoreProductCard
                   {...product}
-                  selectedInterval={selectedInterval}
                   onAddToCart={handleAddToCart}
                 />
               </div>

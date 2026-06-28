@@ -6,14 +6,20 @@ export default function NavbarEnd() {
 
   if (user) {
     return (
+
       <div className="navbar-item has-dropdown is-hoverable">
         <span className="navbar-link">{user.username}</span>
         <div className="navbar-dropdown is-right">
           <a className="navbar-item" onClick={logout}>
             Log out
           </a>
+          <a className="navbar-item" to="/dashboard">
+            Dashboard
+          </a>
+
         </div>
       </div>
+
     )
   }
 

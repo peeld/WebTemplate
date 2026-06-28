@@ -22,5 +22,4 @@ export const routes = [
 
 export const navItems = [
   { label: 'Store',   path: '/billing/store' },
-  { label: 'Pricing', path: '/billing/pricing' },
 ];

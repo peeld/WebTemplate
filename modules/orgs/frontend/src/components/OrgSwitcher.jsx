@@ -20,7 +20,7 @@ export default function OrgSwitcher() {
             return (
               <li key={org.id} className="mb-1">
                 <button
-                  className={`button is-fullwidth is-justify-content-flex-start${isActive ? ' is-primary is-light' : ' is-white'}`}
+                  className={`button is-fullwidth is-justify-content-flex-start${isActive ? ' is-dark' : ' '}`}
                   onClick={() => switchOrg(org)}
                   disabled={isActive}
                 >
