@@ -101,13 +101,13 @@ Create an execution role for the Lambda function with this policy (in addition t
       "Sid": "ReadSource",
       "Effect": "Allow",
       "Action": "s3:GetObject",
-      "Resource": "arn:aws:s3:::your-app-uploads/*"
+      "Resource": "arn:aws:s3:::media-incoming-359565655000-us-west-2-an/*"
     },
     {
       "Sid": "WriteProcessed",
       "Effect": "Allow",
       "Action": "s3:PutObject",
-      "Resource": "arn:aws:s3:::your-app-processed/*"
+      "Resource": "arn:aws:s3:::media-outgoing-359565655000-us-west-2-an/*"
     }
   ]
 }

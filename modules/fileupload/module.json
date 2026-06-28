@@ -7,6 +7,9 @@
   "requires": [],
   "pip_packages": [],
   "settings_defaults": {
+    "AWS_FILEUPLOAD_ACCESS_KEY": "",
+    "AWS_FILEUPLOAD_SECRET_KEY": "",
+    "AWS_FILEUPLOAD_S3_REGION": "",
     "AWS_UPLOAD_BUCKET": "",
     "AWS_PROCESSED_BUCKET": "",
     "AWS_S3_REGION": "us-east-1",
