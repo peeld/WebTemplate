@@ -2,21 +2,12 @@ import logging
 from django.conf import settings
 from django.contrib.auth import get_user_model
 
-from userauth.emails import base_html, send_email
+from core.emails import base_html, send_email
 
 logger = logging.getLogger(__name__)
 
 APP_NAME = getattr(settings, 'APP_NAME', 'App')
 FRONTEND_URL = getattr(settings, 'FRONTEND_URL', 'http://localhost:5173')
-
-
-def _staff_emails():
-    User = get_user_model()
-    return list(
-        User.objects.filter(models_filter=None, is_active=True)
-        .filter(models.Q(is_staff=True) | models.Q(is_superuser=True))
-        .values_list('email', flat=True)
-    )
 
 
 def _staff_email_list():

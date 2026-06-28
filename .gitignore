@@ -2,6 +2,8 @@ done/
 log.txt
 core/backend/db.sqlite3
 core/backend/*/
+!core/backend/core/
+!core/backend/core_app/
 
 # Python
 __pycache__/
