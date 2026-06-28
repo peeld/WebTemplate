@@ -373,6 +373,41 @@ def _render_settings_dict(d, indent=4):
 
 
 # ---------------------------------------------------------------------------
+# Module wiring (shared by add and regen)
+# ---------------------------------------------------------------------------
+
+def _wire_module(name, manifest=None):
+    """Install Python packages and create the backend symlink for one module.
+
+    Idempotent — safe to call on an already-wired module.
+    """
+    module_dir = MODULES_DIR / name
+    if manifest is None:
+        manifest = _load_module_json(module_dir)
+
+    # Python dependencies — prefer pip_packages in module.json, fall back to requirements.txt
+    pip_packages = manifest.get("pip_packages", [])
+    if pip_packages:
+        print(f"  [{name}] Installing Python packages...")
+        _run(sys.executable, "-m", "pip", "install", *pip_packages, "-q")
+    else:
+        req_file = module_dir / "backend" / "requirements.txt"
+        if req_file.exists() and req_file.stat().st_size > 0:
+            print(f"  [{name}] Installing Python packages...")
+            _run(sys.executable, "-m", "pip", "install", "-r", str(req_file), "-q")
+
+    # Backend symlink: core/backend/<name> -> ../../modules/<name>/backend/<name>
+    app_src = MODULES_DIR / name / "backend" / name
+    if not app_src.exists():
+        _die(f"Django app directory not found: {app_src}")
+    backend_link = BACKEND_DIR / name
+    if not backend_link.exists():
+        target = Path("../../modules") / name / "backend" / name
+        _link_dir(backend_link, target)
+        print(f"  [{name}] Linked core/backend/{name} -> {target}")
+
+
+# ---------------------------------------------------------------------------
 # Add
 # ---------------------------------------------------------------------------
 
@@ -392,26 +427,7 @@ def add(name):
             _die(f"'{name}' requires module '{dep}' which is not installed.")
         print(f"  + Dependency '{dep}' present")
 
-    # Python dependencies — prefer pip_packages in module.json, fall back to requirements.txt
-    pip_packages = manifest.get("pip_packages", [])
-    if pip_packages:
-        print("  Installing Python packages...")
-        _run(sys.executable, "-m", "pip", "install", *pip_packages, "-q")
-    else:
-        req_file = module_dir / "backend" / "requirements.txt"
-        if req_file.exists() and req_file.stat().st_size > 0:
-            print("  Installing Python packages...")
-            _run(sys.executable, "-m", "pip", "install", "-r", str(req_file), "-q")
-
-    # Backend symlink: core/backend/<name> -> ../../modules/<name>/backend/<name>
-    app_src = MODULES_DIR / name / "backend" / name
-    if not app_src.exists():
-        _die(f"Django app directory not found: {app_src}")
-    backend_link = BACKEND_DIR / name
-    if not backend_link.exists():
-        target = Path("../../modules") / name / "backend" / name
-        _link_dir(backend_link, target)
-        print(f"  + Linked core/backend/{name} -> {target}")
+    _wire_module(name, manifest)
 
     # Regenerate manifests
     generate_manifest()
@@ -498,7 +514,27 @@ def remove(name, run_migrations=False):
 # ---------------------------------------------------------------------------
 
 def regen():
-    """Regenerate installed_modules.py and modules.js from current modules/ state."""
+    """Wire all modules (symlinks + pip packages) and regenerate manifests.
+
+    Runs the same setup as 'add' for every module in dependency order, making
+    it safe to use as the sole deploy-time module activation step.
+    """
+    # Collect all modules and resolve dependency order
+    graph = {}
+    manifests = {}
+    for module_dir in sorted(MODULES_DIR.iterdir()):
+        if not module_dir.is_dir() or not (module_dir / "module.json").exists():
+            continue
+        data = _load_module_json(module_dir)
+        graph[module_dir.name] = data.get("requires", [])
+        manifests[module_dir.name] = data
+
+    ordered = _topo_sort(graph)
+
+    print("Wiring modules...")
+    for name in ordered:
+        _wire_module(name, manifests[name])
+
     print("Regenerating manifests...")
     generate_manifest()
     generate_installed_modules()

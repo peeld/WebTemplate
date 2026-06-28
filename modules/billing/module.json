@@ -10,8 +10,13 @@
     "STRIPE_SECRET_KEY": "",
     "STRIPE_PUBLISHABLE_KEY": "",
     "STRIPE_WEBHOOK_SECRET": "",
-    "STRIPE_SUCCESS_URL": "http://localhost:5173/billing/success",
-    "STRIPE_CANCEL_URL": "http://localhost:5173/billing/pricing"
+    "STRIPE_SUCCESS_URL": "",
+    "STRIPE_CANCEL_URL": "",
+    "LICENSE_APP_SECRET": "",
+    "LICENSE_RSA_PRIVATE_KEY_PATH": "",
+    "LICENSE_RSA_PUBLIC_KEY_PATH": "",
+    "LICENSE_DEFAULT_MAX_MACHINES": 1,
+    "LICENSE_DEFAULT_OFFLINE_TTL_DAYS": 30
   },
   "description": "Stripe billing — one-time payments, subscriptions, customer portal, and webhooks."
 }

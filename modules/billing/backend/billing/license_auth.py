@@ -86,9 +86,13 @@ def verify_license_request(request):
 
 def issue_license_token(lic, machine_id_hash):
     """Return (token_str, expires_at_utc_datetime)."""
-    private_key = getattr(settings, 'LICENSE_RSA_PRIVATE_KEY', '')
-    if not private_key:
-        raise RuntimeError('LICENSE_RSA_PRIVATE_KEY is not configured.')
+    key_path = getattr(settings, 'LICENSE_RSA_PRIVATE_KEY_PATH', '')
+    if not key_path:
+        raise RuntimeError('LICENSE_RSA_PRIVATE_KEY_PATH is not configured.')
+    try:
+        private_key = open(key_path).read()
+    except OSError as e:
+        raise RuntimeError(f'Cannot read LICENSE_RSA_PRIVATE_KEY_PATH: {e}') from e
 
     now        = datetime.now(tz=timezone.utc)
     expires_at = now + timedelta(days=lic.offline_ttl_days)

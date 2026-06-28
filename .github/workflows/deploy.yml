@@ -85,7 +85,7 @@ jobs:
 
             echo "--- Regenerating module manifests ---"
             cd $APP_DIR
-            source venv/bin/activate
+            source ../venv/bin/activate
             python install.py regen
 
             echo "--- Installing Python dependencies ---"
@@ -103,7 +103,7 @@ jobs:
             chown -R www-data:www-data $APP_DIR
 
             echo "--- Restarting uvicorn ---"
-            systemctl restart uvicorn-heyhello.art
+            systemctl restart uvicorn-beta.peeldev.com
 
             echo "--- Deploy complete ---"
           EOF
