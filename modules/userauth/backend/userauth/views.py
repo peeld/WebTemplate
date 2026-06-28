@@ -47,6 +47,8 @@ class GoogleLogin(SocialLoginView):
     OAuth login with Google via dj-rest-auth.
     Frontend sends Google access_token; backend authenticates and issues JWT.
     """
+    permission_classes = [AllowAny]
+    
     adapter_class  = GoogleOAuth2Adapter
     callback_url   = settings.FRONTEND_URL
     client_class   = OAuth2Client
@@ -64,6 +66,8 @@ class GoogleRegister(APIView):
     - set_unusable_password() for OAuth users (no password login path)
     - user_registered signal fired so other modules can create related records
     """
+
+    permission_classes = [AllowAny]
 
     def post(self, request):
         access_token = request.data.get('access_token', '').strip()

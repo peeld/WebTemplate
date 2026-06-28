@@ -308,6 +308,14 @@ export default function Signup() {
 
   // ── Step 0: Google signup ─────────────────────────────────────────────────
 
+  const triggerGoogleSignup = () => {
+    if (!form.username.trim()) {
+      setErrors({ error: 'Please enter a username before signing up with Google.' })
+      return
+    }
+    handleGoogleSignup()
+  }
+
   const handleGoogleSignup = useGoogleLogin({
     onSuccess: async (tokenResponse) => {
       setGLoading(true)
@@ -396,7 +404,7 @@ export default function Signup() {
                 form={form} onChange={handleChange}
                 onSubmit={handleAccountSubmit}
                 loading={loading} errors={errors}
-                onGoogleSignup={() => handleGoogleSignup()}
+                onGoogleSignup={triggerGoogleSignup}
                 gLoading={gLoading}
               />
             )}

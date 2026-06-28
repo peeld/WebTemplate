@@ -39,7 +39,8 @@
     "EMAIL_BACKEND": "django_ses.SESBackend",
     "RECAPTCHA_SITE_KEY": "",
     "RECAPTCHA_SECRET_KEY": "",
-    "RECAPTCHA_PROJECT_ID": ""
+    "RECAPTCHA_PROJECT_ID": "",
+    "RECAPTCHA_THRESHOLD": 0.5
   },
   "description": "User authentication — registration, login, logout, and password management."
 }
