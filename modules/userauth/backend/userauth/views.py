@@ -48,7 +48,7 @@ class GoogleLogin(SocialLoginView):
     Frontend sends Google access_token; backend authenticates and issues JWT.
     """
     permission_classes = [AllowAny]
-    
+
     adapter_class  = GoogleOAuth2Adapter
     callback_url   = settings.FRONTEND_URL
     client_class   = OAuth2Client

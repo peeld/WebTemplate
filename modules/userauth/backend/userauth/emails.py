@@ -1,136 +1,19 @@
 """
-userauth/emails.py — Email utilities and auth-related transactional emails
+userauth/emails.py — Auth-related transactional emails.
 
-Contains:
-  - base_html / send_email: shared infrastructure (importable by other modules)
-  - send_verification_email: signup verification code + link
-  - send_password_reset: password reset link
-
-APP_NAME and branding are read from Django settings so they can be customised
-per deployment without editing this file.
+send_email and base_html live in core.emails and are re-exported here
+for backwards compatibility.
 """
 
 import logging
-from django.core.mail import EmailMultiAlternatives
 from django.conf import settings
-from django.core.exceptions import ImproperlyConfigured
+from core.emails import send_email, base_html  # noqa: F401 — re-exported
 
 logger = logging.getLogger(__name__)
 
 FRONTEND_URL = getattr(settings, 'FRONTEND_URL', 'http://localhost:5173')
 APP_NAME     = getattr(settings, 'APP_NAME', 'App')
 
-
-def base_html(title, content):
-    """Wrap content in the standard branded HTML email shell."""
-    return f"""
-<!DOCTYPE html>
-<html>
-<head>
-  <meta charset="utf-8">
-  <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <title>{title}</title>
-</head>
-<body style="margin:0;padding:0;background:#0a1628;font-family:'Inter',system-ui,sans-serif;">
-  <table width="100%" cellpadding="0" cellspacing="0" style="background:#0a1628;padding:40px 0;">
-    <tr>
-      <td align="center">
-        <table width="600" cellpadding="0" cellspacing="0" style="max-width:600px;width:100%;">
-
-          <!-- Header -->
-          <tr>
-            <td style="padding:0 0 32px 0;text-align:center;">
-              <span style="font-size:22px;font-weight:700;color:#ffffff;">
-                {APP_NAME}
-              </span>
-            </td>
-          </tr>
-
-          <!-- Card -->
-          <tr>
-            <td style="background:#112240;border:1px solid rgba(255,255,255,0.07);border-radius:16px;padding:40px;">
-              {content}
-            </td>
-          </tr>
-
-          <!-- Footer -->
-          <tr>
-            <td style="padding:24px 0 0 0;text-align:center;">
-              <p style="color:#8899aa;font-size:12px;margin:0;">
-                &copy; 2026 Peel Software Development LLC - All rights reserved.<br>
-                <a href="{{{{ unsubscribe_url }}}}" style="color:#8899aa;">Unsubscribe</a>
-              </p>
-            </td>
-          </tr>
-
-        </table>
-      </td>
-    </tr>
-  </table>
-</body>
-</html>
-"""
-
-
-def send_email(to, subject, text_body, html_body):
-    """
-    Core send function — all emails go through here.
-
-    Raises:
-        ImproperlyConfigured: If DEFAULT_FROM_EMAIL is not set.
-        ValueError: If 'to' is empty or wrong type.
-    """
-    try:
-        from_email = getattr(settings, 'DEFAULT_FROM_EMAIL', None)
-        if not from_email:
-            raise ImproperlyConfigured(
-                'DEFAULT_FROM_EMAIL is not configured. Set it in Django settings.'
-            )
-
-        if isinstance(to, str):
-            recipients = [to]
-        elif isinstance(to, (list, tuple)):
-            recipients = list(to)
-        else:
-            raise ValueError(f'Invalid recipient type: {type(to)}. Expected str or list.')
-
-        if not recipients:
-            raise ValueError('Recipient list cannot be empty.')
-
-        msg = EmailMultiAlternatives(
-            subject=subject,
-            body=text_body,
-            from_email=from_email,
-            to=recipients,
-        )
-        msg.attach_alternative(html_body, 'text/html')
-        result = msg.send(fail_silently=False)
-
-        logger.info(
-            'Email sent successfully',
-            extra={'subject': subject, 'to': recipients, 'result': result},
-        )
-        return result
-
-    except ImproperlyConfigured as e:
-        logger.critical('Email configuration error: %s', e, exc_info=True)
-        raise
-
-    except ValueError as e:
-        logger.warning('Invalid email recipient: %s', e, exc_info=True)
-        raise
-
-    except Exception as e:
-        logger.error(
-            'Failed to send email: %s',
-            e,
-            extra={'subject': subject, 'recipients': to, 'error_type': type(e).__name__},
-            exc_info=True,
-        )
-        raise
-
-
-# ── Auth transactional emails ────────────────────────────────────────────────
 
 def send_verification_email(user, token, code):
     """
