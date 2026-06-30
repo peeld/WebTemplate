@@ -1,10 +1,13 @@
 import { CartProvider } from './context/CartContext.jsx';
 import BillingUserSection from './pages/BillingUserSection.jsx';
 import FeaturedProducts from './pages/FeaturedProducts.jsx';
+import CartIcon from './components/CartIcon.jsx';
 
 export { routes, navItems } from './routes.jsx';
 
 export const providers = [CartProvider];
+
+export const navbarEnd = [CartIcon];
 
 export const adminCards = [
   {
