@@ -46,8 +46,8 @@ export default function StorePage() {
   return (
     <section className="section">
       <div className="container">
-        <div className="has-text-centered mb-6">
-          <h1 className="title">Store</h1>
+        <div className="mb-6">
+          <h1 className="title mb-3">Store</h1>
           <p className="subtitle has-text-grey">Browse all products and plans.</p>
         </div>
 

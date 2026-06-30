@@ -57,6 +57,7 @@ jobs:
           VITE_RELEASE_VERSION: ${{ github.sha }}
           VITE_APP_NAME: ${{ vars.APP_NAME }}
           VITE_APP_ICON: ${{ vars.APP_ICON }}
+          VITE_NAV_ICON: ${{ vars.NAV_ICON }}
 
       # -------------------------------------------------------
       # 4. Push entire app (code + built frontend) to server
