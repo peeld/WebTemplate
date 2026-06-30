@@ -24,7 +24,7 @@ export default function LicenseSection() {
       <div className="card-content">
 
         <div className="level-right">
-          <Link to="/licensing/keys" className="button is-small is-light">Manage</Link>
+          <Link to="/licensing/keys" className="button is-small is-primary">Manage</Link>
         </div>
       {loading ? (
         <p className="has-text-grey is-size-7">Loading…</p>

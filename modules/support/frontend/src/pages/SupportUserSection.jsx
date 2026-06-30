@@ -25,6 +25,10 @@ export default function SupportUserSection() {
 
       <div className="card-content">
 
+        <div className="level-right">
+          <Link to="/support/new" className="button is-small is-primary">New Ticket</Link>
+        </div>
+
         {loading ? (
           <p className="has-text-grey is-size-7">Loading…</p>
         ) : tickets.length === 0 ? (
@@ -43,9 +47,6 @@ export default function SupportUserSection() {
           </>
         )}
 
-        <div className="mt-3">
-          <Link to="/support/new" className="button is-small is-primary">New Ticket</Link>
-        </div>
       </div>
     </div>
   )

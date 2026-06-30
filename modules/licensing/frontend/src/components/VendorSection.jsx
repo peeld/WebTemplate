@@ -28,7 +28,7 @@ export default function VendorSection() {
       <div className="card-content">
 
         <div className="level-right">
-          <Link to="/vendor/portal" className="button is-small is-light">Manage</Link>
+          <Link to="/vendor/portal" className="button is-small is-primary">Manage</Link>
         </div>
 
       {loading ? (

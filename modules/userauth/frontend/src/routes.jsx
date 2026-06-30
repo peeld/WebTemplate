@@ -22,5 +22,6 @@ export const routes = [
   { path: '/verify-email/:token',    element: <VerifyEmail /> },
 ]
 
-// No persistent nav links — auth UI is driven by Navbar checking AuthContext.
-export const navItems = []
+export const navItems = [
+  { label: 'Dashboard',   path: '/dashboard' },
+];
