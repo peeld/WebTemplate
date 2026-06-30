@@ -23,5 +23,5 @@ export const routes = [
 ]
 
 export const navItems = [
-  { label: 'Dashboard',   path: '/dashboard' },
+  { label: 'Dashboard',   path: '/dashboard', requiresAuth: true },
 ];
