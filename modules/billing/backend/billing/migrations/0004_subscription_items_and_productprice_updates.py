@@ -9,6 +9,12 @@ class Migration(migrations.Migration):
     ]
 
     operations = [
+        # Drop index that already exists in production from the original OneToOneField;
+        # AlterField below will recreate it as a non-unique FK index.
+        migrations.RunSQL(
+            sql='DROP INDEX IF EXISTS "billing_subscription_customer_id_05c1a509";',
+            reverse_sql=migrations.RunSQL.noop,
+        ),
         # Subscription: OneToOneField → ForeignKey (allows multiple subscriptions per customer)
         migrations.AlterField(
             model_name='subscription',
