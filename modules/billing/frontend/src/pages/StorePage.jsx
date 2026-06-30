@@ -85,6 +85,7 @@ export default function StorePage() {
               <div key={product.id} className="column is-one-quarter-widescreen is-one-third-desktop is-half-tablet">
                 <StoreProductCard
                   {...product}
+                  product_id={product.id}
                   onAddToCart={handleAddToCart}
                 />
               </div>

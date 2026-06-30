@@ -1,0 +1,16 @@
+{
+  "name": "files",
+  "version": "1.0.0",
+  "django_app": "files",
+  "npm_package": "@modules/files",
+  "url_prefix": "files",
+  "requires": [],
+  "pip_packages": ["boto3>=1.34", "botocore>=1.34"],
+  "settings_defaults": {
+    "FILES_AWS_ACCESS_KEY_ID": "",
+    "FILES_AWS_SECRET_ACCESS_KEY": "",
+    "FILES_AWS_REGION": "us-east-1",
+    "FILES_S3_PRESIGNED_URL_EXPIRY": 3600
+  },
+  "description": "Versioned software releases with S3-hosted downloadable assets."
+}

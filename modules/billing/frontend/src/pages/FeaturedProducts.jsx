@@ -38,7 +38,7 @@ export default function FeaturedProducts() {
         <div className="columns is-multiline">
           {products.map(product => (
             <div key={product.id} className="column is-one-quarter-widescreen is-one-third-desktop is-half-tablet">
-              <StoreProductCard {...product} onAddToCart={addToCart} />
+              <StoreProductCard {...product} product_id={product.id} onAddToCart={addToCart} />
             </div>
           ))}
         </div>

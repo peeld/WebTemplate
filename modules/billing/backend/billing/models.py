@@ -15,6 +15,14 @@ class Product(models.Model):
     features          = models.JSONField(default=list, blank=True, help_text='List of feature strings')
     stripe_product_id = models.CharField(max_length=255, blank=True)
     fulfillment_type  = models.CharField(max_length=20, choices=FULFILLMENT_CHOICES, default='digital')
+    download_label    = models.CharField(
+                            max_length=100,
+                            blank=True,
+                            default='',
+                            help_text='If set, shows a download button on the product card. '
+                                      'Example: "Download" or "Download 30-day trial". '
+                                      'Requires the files module to be installed.',
+                        )
     is_active         = models.BooleanField(default=True)
     sort_order        = models.PositiveIntegerField(default=0)
     created_at        = models.DateTimeField(auto_now_add=True)

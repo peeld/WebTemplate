@@ -1,4 +1,4 @@
-import { useState } from 'react';
+import { useState, useEffect } from 'react';
 
 const INTERVAL_LABEL = { week: '/wk', month: '/mo', year: '/yr' };
 const INTERVAL_ORDER = { week: 0, month: 1, year: 2 };
@@ -14,8 +14,17 @@ function formatPrice(amount, currency) {
   }
 }
 
-export default function StoreProductCard({ name, description, thumbnail, features, fulfillment_type, prices = [], onAddToCart }) {
+export default function StoreProductCard({ name, description, thumbnail, features, fulfillment_type, prices = [], onAddToCart, product_id, download_label }) {
   const [added, setAdded] = useState(null);
+  const [latestRelease, setLatestRelease] = useState(null);
+
+  useEffect(() => {
+    if (!download_label || !product_id) return;
+    fetch(`/api/files/releases/latest/?product_id=${product_id}`)
+      .then(r => r.ok ? r.json() : null)
+      .then(data => setLatestRelease(data))
+      .catch(() => {});
+  }, [product_id, download_label]);
 
   const product = { name, description, thumbnail, features, fulfillment_type, prices };
 
@@ -138,6 +147,26 @@ export default function StoreProductCard({ name, description, thumbnail, feature
 
           {fulfillment_type === 'physical' && !isFree && (
             <p className="is-size-7 has-text-grey mt-2 has-text-centered">Ships to your door</p>
+          )}
+
+          {latestRelease && (
+            <div style={{ borderTop: '1px solid #ededed', paddingTop: '0.75rem', marginTop: '0.75rem' }}>
+              {latestRelease.assets.length === 1 ? (
+                <a
+                  className="button is-link is-fullwidth is-small"
+                  href={`/api/files/releases/${latestRelease.id}/assets/${latestRelease.assets[0].id}/download/`}
+                >
+                  {download_label}
+                </a>
+              ) : (
+                <a
+                  className="button is-link is-fullwidth is-small"
+                  href={`/downloads/releases/${latestRelease.id}/`}
+                >
+                  {download_label}
+                </a>
+              )}
+            </div>
           )}
         </div>
       </div>

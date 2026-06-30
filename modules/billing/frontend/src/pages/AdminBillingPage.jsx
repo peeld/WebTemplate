@@ -1017,27 +1017,30 @@ export default function AdminBillingPage() {
                 </div>
               ) : (
                 <div key={product.id} className="box mb-3">
-                  <div className="level is-mobile" style={{ flexWrap: 'wrap', gap: '0.5rem', alignItems: 'flex-start' }}>
-                    <div className="level-left" style={{ flexWrap: 'wrap' }}>
+                  <div style={{ flexWrap: 'wrap', gap: '0.5rem', alignItems: 'flex-start' }}>
+                    <div style={{ flexWrap: 'wrap' }}>
                       <div>
-                        <p className="has-text-weight-semibold">
-                          {product.name}
+                        <p className="has-text-weight-semibold mb-2">
+                              {product.name}
                           {' '}
-                          <span className={`tag is-small ${product.is_active ? 'is-success' : 'is-light'}`}>
+                          <span className={`tag ml-4 is-small ${product.is_active ? 'is-success' : 'is-light'}`}>
                             {product.is_active ? 'Active' : 'Inactive'}
                           </span>
                           {' '}
-                          <span className="tag is-small is-light">
+                          <span className="tag ml-2 is-small is-light">
                             {product.fulfillment_type === 'physical' ? 'Physical' : 'Digital'}
                           </span>
                         </p>
-                        <p className="is-size-7 has-text-grey">{product.slug}</p>
-                        <p className="is-size-7 has-text-grey">
+                        <p className="is-size-7 has-text-grey mb-2">{product.slug}</p>
+                        <p className="is-size-7 has-text-grey mb-4">
                           {product.stripe_product_id
                             ? <><span className="has-text-success-dark">Stripe:</span> <code>{product.stripe_product_id}</code></>
                             : <span className="has-text-warning-dark">Not synced to Stripe</span>}
                         </p>
-                        {product.description && <p className="is-size-7 mt-1">{product.description}</p>}
+                        {product.description.split('\n').filter(l => l.trim() !== '').map((line, i) => (
+                          <p key={i} className={`is-size-7 has-text-grey mb-2${i === 0 ? ' has-text-weight-bold' : ''}`}>{line}</p>
+                        ))}
+
                       </div>
                     </div>
                     <div className="level-right">
