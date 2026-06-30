@@ -1,5 +1,6 @@
 import LicenseSection from './components/LicenseSection.jsx';
 import VendorSection  from './components/VendorSection.jsx';
+import { getVendorPools } from './api.js';
 
 export { routes, navItems } from './routes.jsx';
 
@@ -16,4 +17,7 @@ export const adminCards = [
   },
 ];
 
-export const userSections = [LicenseSection, VendorSection];
+export const userSections = [
+  { component: LicenseSection },
+  { component: VendorSection, load: () => getVendorPools().then(r => r.ok ? r.json() : []).then(d => Array.isArray(d) && d.length > 0) },
+];

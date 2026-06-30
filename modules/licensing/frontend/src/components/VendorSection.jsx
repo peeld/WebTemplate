@@ -2,7 +2,7 @@ import { useEffect, useState } from 'react';
 import { Link } from 'react-router-dom';
 import { getVendorPools } from '../api.js';
 
-export default function VendorSection({ onEmpty }) {
+export default function VendorSection() {
   const [pools, setPools]     = useState([]);
   const [loading, setLoading] = useState(true);
 
@@ -14,7 +14,7 @@ export default function VendorSection({ onEmpty }) {
       .finally(() => setLoading(false));
   }, []);
 
-  if (!loading && pools.length === 0) { onEmpty?.(); return null; }
+  if (!loading && pools.length === 0) return null;
 
   const totalRemaining = pools.reduce((sum, p) => sum + p.seats_remaining, 0);
   const totalIssued    = pools.reduce((sum, p) => sum + p.seats_issued, 0);

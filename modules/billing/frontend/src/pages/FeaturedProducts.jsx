@@ -28,7 +28,6 @@ export default function FeaturedProducts() {
           <div className="level-left">
             <div>
               <h2 className="title is-4 mb-1">Featured Products</h2>
-              <p className="subtitle is-6 has-text-grey">Browse what&rsquo;s available in the store.</p>
             </div>
           </div>
           <div className="level-right">

@@ -1,7 +1,7 @@
 export { routes, navItems } from './routes.jsx'
 import SupportUserSection from './pages/SupportUserSection'
 
-export const userSections = [SupportUserSection]
+export const userSections = [{ component: SupportUserSection }]
 
 export const adminCards = [
   {

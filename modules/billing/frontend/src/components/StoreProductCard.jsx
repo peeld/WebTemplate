@@ -43,10 +43,14 @@ export default function StoreProductCard({ name, description, thumbnail, feature
       )}
 
       <div className="card-content" style={{ flex: 1, display: 'flex', flexDirection: 'column' }}>
-        <div style={{ flex: 1 }}>
-          <p className="title is-5 mb-1">{name}</p>
+        <div style={{ flex: 1 }} className="mb-4">
+          <p className="title is-5 mb-3">{name}</p>
           {description && (
-            <p className="is-size-7 has-text-grey mb-3">{description}</p>
+            <div className="mb-3">
+              {description.split('\n').filter(l => l.trim() !== '').map((line, i) => (
+                <p key={i} className={`is-size-7 has-text-grey mb-2${i === 0 ? ' has-text-weight-bold' : ''}`}>{line}</p>
+              ))}
+            </div>
           )}
           {Array.isArray(features) && features.length > 0 && (
             <ul style={{ listStyle: 'none', padding: 0, margin: '0 0 1rem' }}>

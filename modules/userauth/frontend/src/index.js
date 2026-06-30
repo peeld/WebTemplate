@@ -42,4 +42,4 @@ import NavbarEndComponent from './components/NavbarEnd'
 export const navbarEnd = [NavbarEndComponent]
 
 import AccountSection from './pages/AccountSection'
-export const userSections = [AccountSection]
+export const userSections = [{ component: AccountSection }]

@@ -21,6 +21,6 @@ export const adminCards = [
   },
 ];
 
-export const userSections = [BillingUserSection];
+export const userSections = [{ component: BillingUserSection }];
 
 export const homeSections = [FeaturedProducts];

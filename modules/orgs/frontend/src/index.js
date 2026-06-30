@@ -8,4 +8,4 @@ export { orgsApi } from './api'
 export const providers = [OrgProvider]
 
 import OrgSection from './pages/OrgSection'
-export const userSections = [OrgSection]
+export const userSections = [{ component: OrgSection }]
