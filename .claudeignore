@@ -1,3 +1,4 @@
 done
 venv
 .git
+modules/licensing/cpp/vs_build

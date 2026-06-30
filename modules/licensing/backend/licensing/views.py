@@ -82,6 +82,7 @@ def _issue_jwt(license_key_obj, machine):
         'license': str(license_key_obj.key),
         'machine': machine.machine_id_hash,
         'product': license_key_obj.product.slug,
+        'iat':     int(timezone.now().timestamp()),
         'exp':     int(exp.timestamp()),
     }
 

@@ -78,7 +78,8 @@ MIIBIjANBgkqhkiG9w0BAQEFAAOCAQ8AMIIBCgKCAQEA...
 -----END PUBLIC KEY-----
 )";
 
-LicenseVerifier verifier(PUBLIC_KEY_PEM);
+// Second argument is the anti-rollback checkpoint file path (optional but recommended).
+LicenseVerifier verifier(PUBLIC_KEY_PEM, "/var/lib/myapp/license.cp");
 ```
 
 Inject the key via the build system rather than editing source directly — e.g. `configure_file` in CMake or a `-D` flag.
@@ -106,7 +107,8 @@ auto act = client.activate(tok.license_key);
 // The license key UUID is now discarded — never store it.
 
 // Verify the JWT locally before persisting.
-LicenseVerifier verifier(PUBLIC_KEY_PEM);
+// Pass the checkpoint path so the anti-rollback state is seeded immediately.
+LicenseVerifier verifier(PUBLIC_KEY_PEM, CHECKPOINT_FILE);
 verifier.verify(act.token);
 
 // Persist these three values in encrypted local storage:
@@ -123,7 +125,9 @@ verifier.verify(act.token);
 #include "crypto_utils.h"
 #include "machine_id.h"
 
-LicenseVerifier verifier(PUBLIC_KEY_PEM);
+// CHECKPOINT_FILE should be a stable, writable path (e.g. OS app-data directory).
+// It is updated after every successful verify() call to prevent clock rollback.
+LicenseVerifier verifier(PUBLIC_KEY_PEM, CHECKPOINT_FILE);
 std::string active_jwt = load_persisted_jwt();
 
 // Renew if the JWT is expiring within 24 hours (or has already expired).
@@ -170,22 +174,25 @@ LicenseClient(std::string base_url, std::string app_secret = "");
 ### `LicenseVerifier`
 
 ```cpp
-LicenseVerifier(std::string public_key_pem);
+LicenseVerifier(std::string public_key_pem, std::string checkpoint_path = "");
 ```
+
+`checkpoint_path` is the path to a small binary file used for anti-rollback protection. On each successful `verify()` call the effective clock time is written to this file (XOR-masked, not a raw timestamp). On subsequent calls the stored value is included when computing the current time, so rolling the system clock back past a previously seen timestamp causes verification to fail. Pass an empty string to disable this feature (not recommended for production).
 
 | Method | Description |
 |---|---|
-| `verify(jwt)` | Verify RS256 signature, expiry, and claims. Throws `std::runtime_error` on any failure. Returns `VerifyResult`. |
-| `expiring_soon(jwt, within_seconds)` | Returns `true` if the JWT expires within `within_seconds` (default 86400). Does not check the signature. Returns `true` if the JWT cannot be parsed. |
+| `verify(jwt)` | Verify RS256 signature, expiry, and claims. Updates the checkpoint file on success. Throws `std::runtime_error` on any failure. Returns `VerifyResult`. |
+| `expiring_soon(jwt, within_seconds)` | Returns `true` if the JWT expires within `within_seconds` (default 86400). Does not check the signature. Returns `true` if the JWT cannot be parsed. Falls back to the system clock (ignoring the checkpoint) if the filesystem scan fails. |
 
 ### `VerifyResult`
 
 ```cpp
 struct VerifyResult {
-    std::string license;  // license UUID
-    std::string machine;  // SHA-256 of machine hardware ID
-    std::string product;  // product slug
-    long long   exp;      // expiry as unix timestamp
+    std::string license;             // license UUID
+    std::string machine;             // SHA-256 of machine hardware ID
+    std::string product;             // product slug
+    long long   exp              = 0; // expiry as unix timestamp
+    long long   clock_skew_seconds = 0; // seconds the local clock appears behind the server's iat; 0 if no skew detected
 };
 ```
 
@@ -228,7 +235,8 @@ licensing_cli checkin \
 # Verify a JWT locally without a network call
 licensing_cli verify \
   --offline-jwt <jwt> \
-  --public-key /path/to/license_public.pem
+  --public-key /path/to/license_public.pem \
+  --checkpoint /path/to/license.cp   # optional; reads/updates anti-rollback state
 ```
 
 ### `app_example` — integration test / simulation

@@ -49,7 +49,8 @@ NBf/b1L5Lxu5GP0G5xQoBya+rKlZCw+E2D0YDdEpr1ZAa/WoS9aAUEJyZE7kVtGG
 
 // Where credentials are persisted between runs.
 // In a real app use the OS app-data directory and encrypt the contents.
-static const char* CREDS_FILE = ".license";
+static const char* CREDS_FILE      = ".license";
+static const char* CHECKPOINT_FILE = ".license.cp";
 
 // ── Credential storage ────────────────────────────────────────────────────
 
@@ -74,7 +75,7 @@ static bool load_credentials(Credentials& out) {
 }
 
 static void save_credentials(const Credentials& c) {
-    std::ofstream f(CREDS_FILE);
+    std::ofstream f(CREDS_FILE);    
     if (!f) throw std::runtime_error(std::string("Cannot write credentials: ") + CREDS_FILE);
     f << json({
         {"machine_secret", c.machine_secret},
@@ -86,7 +87,7 @@ static void save_credentials(const Credentials& c) {
 // ── Helpers ───────────────────────────────────────────────────────────────
 
 static LicenseVerifier make_verifier() {
-    return LicenseVerifier(PUBLIC_KEY_PEM);
+    return LicenseVerifier(PUBLIC_KEY_PEM, CHECKPOINT_FILE);
 }
 
 // ── First-run activation ──────────────────────────────────────────────────

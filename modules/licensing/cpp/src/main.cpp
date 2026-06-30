@@ -29,7 +29,8 @@ static void print_usage(const char* prog) {
         << "  --app-secret     LICENSE_APP_SECRET value\n\n"
         << "verify options:\n"
         << "  --offline-jwt    JWT string to verify\n"
-        << "  --public-key     Path to RSA public key PEM\n";
+        << "  --public-key     Path to RSA public key PEM\n"
+        << "  --checkpoint     Path to anti-rollback checkpoint file (optional)\n";
 }
 
 static std::string get_arg(int argc, char** argv, const char* flag,
@@ -61,6 +62,7 @@ int main(int argc, char** argv) {
     std::string machine_secret = get_arg(argc, argv, "--machine-secret");
     std::string offline_jwt    = get_arg(argc, argv, "--offline-jwt");
     std::string public_key     = get_arg(argc, argv, "--public-key");
+    std::string checkpoint     = get_arg(argc, argv, "--checkpoint");
 
     if (url.empty() && cmd != "verify") {
         std::cerr << "Error: --url is required.\n\n";
@@ -131,13 +133,15 @@ int main(int argc, char** argv) {
                 return 1;
             }
 
-            LicenseVerifier verifier(read_file(public_key));
+            LicenseVerifier verifier(read_file(public_key), checkpoint);
             auto vr = verifier.verify(offline_jwt);
             std::cout << "JWT is valid.\n"
                       << "  license=" << vr.license << "\n"
                       << "  machine=" << vr.machine << "\n"
                       << "  product=" << vr.product << "\n"
                       << "  exp="     << vr.exp     << "\n";
+            if (vr.clock_skew_seconds > 0)
+                std::cout << "  clock_skew=" << vr.clock_skew_seconds << "s (local clock appears slow)\n";
 
         } else {
             std::cerr << "Unknown command: " << cmd << "\n\n";
