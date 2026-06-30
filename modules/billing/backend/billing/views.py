@@ -1,7 +1,6 @@
 import json
 import logging
 import os
-import secrets
 from datetime import datetime, timezone as dt_utc, timedelta
 
 import stripe
@@ -15,10 +14,12 @@ from rest_framework.permissions import IsAuthenticated, IsAdminUser, AllowAny
 from rest_framework.response import Response
 from rest_framework.views import APIView
 
-from .license_auth import ACTIVE_STATUSES, SubscriptionRequired, generate_machine_secret, issue_license_token, verify_license_request, verify_machine_request
-from .models import InstallToken, LicenseKey, LicenseMachine, Product, ProductImage, ProductPrice, StripeCustomer, Subscription, SubscriptionItem
-from .serializers import ProductSerializer, SubscriptionSerializer, AdminProductSerializer, AdminProductPriceSerializer, AdminSubscriptionSerializer, AdminLicenseSerializer, ProductImageSerializer, UserLicenseSerializer
+from .models import Product, ProductImage, ProductPrice, StripeCustomer, Subscription, SubscriptionItem
+from .serializers import ProductSerializer, SubscriptionSerializer, AdminProductSerializer, AdminProductPriceSerializer, AdminSubscriptionSerializer, ProductImageSerializer
 from .signals import checkout_completed, subscription_activated, subscription_cancelled, payment_completed
+from core_app.signals import license_grant_requested
+
+ACTIVE_STATUSES = {'active', 'trialing'}
 
 logger = logging.getLogger(__name__)
 
@@ -128,16 +129,23 @@ def _get_or_create_stripe_customer(user, client):
         sc = user.stripe_customer
         return sc, sc.stripe_customer_id
     except StripeCustomer.DoesNotExist:
-        customer = client.Customer.create(
-            email=user.email,
-            metadata={'user_id': str(user.pk)},
-        )
+        pass
+
+    customer = client.Customer.create(
+        email=user.email,
+        metadata={'user_id': str(user.pk)},
+    )
+    try:
         sc = StripeCustomer.objects.create(
             user=user,
             stripe_customer_id=customer.id,
         )
         logger.info('Created Stripe customer %s for user %s', customer.id, user.pk)
-        return sc, customer.id
+    except IntegrityError:
+        # Concurrent request won the race; use the record it created.
+        sc = StripeCustomer.objects.get(user=user)
+        logger.info('StripeCustomer race resolved for user %s; using existing %s', user.pk, sc.stripe_customer_id)
+    return sc, sc.stripe_customer_id
 
 
 class ProductsView(APIView):
@@ -690,48 +698,32 @@ class WebhookView(APIView):
             logger.warning('payment_intent.succeeded: no StripeCustomer for %s', customer_id)
             return
 
+        payment_completed.send(sender=self.__class__, user=sc.user, payment_intent=payment_intent)
+        logger.info('payment_completed signal fired for user %s (pi=%s)', sc.user.pk, payment_intent.get('id'))
+
         grants_json = (payment_intent.get('metadata') or {}).get('grants')
         if grants_json:
             try:
                 grants = json.loads(grants_json)
-                for grant in grants:
-                    slug = grant.get('slug')
-                    days = grant.get('days')
-                    if not slug or not days:
-                        continue
-                    try:
-                        product = Product.objects.get(slug=slug)
-                    except Product.DoesNotExist:
-                        logger.warning('payment_intent.succeeded: product slug %r not found for day grant', slug)
-                        continue
-                    now = timezone.now()
-                    lic, created = LicenseKey.objects.get_or_create(
-                        user=sc.user,
-                        product=product,
-                        defaults={
-                            'expires_at':       now + timedelta(days=days),
-                            'max_machines':     getattr(settings, 'LICENSE_DEFAULT_MAX_MACHINES', 1),
-                            'offline_ttl_days': getattr(settings, 'LICENSE_DEFAULT_OFFLINE_TTL_DAYS', 30),
-                        },
-                    )
-                    if not created:
-                        # Stack days on top of existing expiry; if expired or unset, start from now.
-                        base = lic.expires_at if (lic.expires_at and lic.expires_at > now) else now
-                        update_fields = ['expires_at']
-                        lic.expires_at = base + timedelta(days=days)
-                        if not lic.is_active:
-                            lic.is_active = True
-                            update_fields.append('is_active')
-                        lic.save(update_fields=update_fields)
-                    logger.info(
-                        'Credited %d days to license for user %s product %s (expires_at=%s)',
-                        days, sc.user.pk, slug, lic.expires_at,
-                    )
-            except (json.JSONDecodeError, TypeError) as e:
-                logger.error('payment_intent.succeeded: failed to parse grants metadata: %s', e)
-
-        payment_completed.send(sender=self.__class__, user=sc.user, payment_intent=payment_intent)
-        logger.info('payment_completed signal fired for user %s (pi=%s)', sc.user.pk, payment_intent.get('id'))
+            except (json.JSONDecodeError, TypeError):
+                logger.error('payment_intent.succeeded: malformed grants metadata in pi %s', payment_intent.get('id'))
+                grants = []
+            for grant in grants:
+                slug = grant.get('slug')
+                if not slug:
+                    continue
+                try:
+                    product = Product.objects.get(slug=slug)
+                except Product.DoesNotExist:
+                    logger.warning('payment_intent.succeeded: product slug %r not found (pi=%s)', slug, payment_intent.get('id'))
+                    continue
+                license_grant_requested.send(
+                    sender=self.__class__,
+                    user=sc.user,
+                    product_id=product.pk,
+                    stripe_payment_intent_id=payment_intent.get('id'),
+                )
+                logger.info('license_grant_requested sent for user %s product %s (pi=%s)', sc.user.pk, product.pk, payment_intent.get('id'))
 
     def _handle_invoice_payment_action_required(self, invoice):
         customer_id        = invoice.get('customer')
@@ -789,19 +781,6 @@ class AdminSubscriptionListView(APIView):
     def get(self, request):
         subs = Subscription.objects.select_related('customer__user').all().order_by('-updated_at')
         return Response(AdminSubscriptionSerializer(subs, many=True).data)
-
-
-class AdminLicenseListView(APIView):
-    permission_classes = [IsAdminUser]
-
-    def get(self, request):
-        licenses = (
-            LicenseKey.objects
-            .select_related('user', 'product', 'subscription')
-            .prefetch_related('machines')
-            .order_by('-created_at')
-        )
-        return Response(AdminLicenseSerializer(licenses, many=True).data)
 
 
 class AdminSubscriptionSyncView(APIView):
@@ -1120,204 +1099,3 @@ class AdminProductImageDetailView(APIView):
         logger.info('Deleted image %s from product %s', pk, product_pk)
         return Response(status=204)
 
-
-# ── License endpoints ──────────────────────────────────────────────────────────
-
-@method_decorator(csrf_exempt, name='dispatch')
-class LicenseActivateView(APIView):
-    """
-    First-time activation or reinstall. Registers the machine and returns a
-    signed offline JWT. The client stores this token locally (registry / config
-    file) and uses it for offline verification until it expires.
-    """
-    permission_classes = [AllowAny]
-
-    def post(self, request):
-        lic, machine_id_hash = verify_license_request(request)
-        label = request.data.get('machine_label', '')
-
-        try:
-            machine = lic.machines.get(machine_id_hash=machine_id_hash)
-            if not machine.is_active:
-                return Response({'detail': 'This machine has been deactivated.'}, status=403)
-            if label:
-                machine.label = label
-            machine.machine_secret = generate_machine_secret()
-            machine.save()  # refreshes last_seen via auto_now
-        except LicenseMachine.DoesNotExist:
-            active_count = lic.machines.filter(is_active=True).count()
-            if active_count >= lic.max_machines:
-                machines_data = list(
-                    lic.machines.filter(is_active=True).values('machine_id_hash', 'label', 'last_seen')
-                )
-                return Response(
-                    {
-                        'detail':       'Machine limit reached.',
-                        'max_machines': lic.max_machines,
-                        'machines':     machines_data,
-                    },
-                    status=409,
-                )
-            machine = LicenseMachine.objects.create(
-                license=lic,
-                machine_id_hash=machine_id_hash,
-                label=label,
-                machine_secret=generate_machine_secret(),
-            )
-            logger.info('Activated machine %s on license %s', machine_id_hash[:8], lic.key)
-
-        token, expires_at = issue_license_token(lic, machine_id_hash)
-        return Response({
-            'token':          token,
-            'expires_at':     expires_at.isoformat(),
-            'machines_used':  lic.machines.filter(is_active=True).count(),
-            'max_machines':   lic.max_machines,
-            'machine_secret': machine.machine_secret,
-        })
-
-
-@method_decorator(csrf_exempt, name='dispatch')
-class LicenseCheckinView(APIView):
-    """
-    Renewal check-in. The machine must already be registered. Returns a fresh
-    signed JWT to extend the offline grace period.
-    """
-    permission_classes = [AllowAny]
-
-    def post(self, request):
-        lic, machine_id_hash = verify_license_request(request)
-
-        try:
-            machine = lic.machines.get(machine_id_hash=machine_id_hash, is_active=True)
-        except LicenseMachine.DoesNotExist:
-            return Response(
-                {'detail': 'Machine not registered or deactivated. Call /activate/ first.'},
-                status=403,
-            )
-
-        machine.save()  # refreshes last_seen
-        token, expires_at = issue_license_token(lic, machine_id_hash)
-        return Response({'token': token, 'expires_at': expires_at.isoformat()})
-
-
-@method_decorator(csrf_exempt, name='dispatch')
-class MachineCheckinView(APIView):
-    """
-    Check-in using machine_secret only — client does not need to store the license key UUID.
-    Signs requests with the machine_secret returned at activation.
-    Returns a fresh offline JWT.
-    """
-    permission_classes = [AllowAny]
-
-    def post(self, request):
-        lic, machine = verify_machine_request(request)
-        machine.save()  # refreshes last_seen
-        token, expires_at = issue_license_token(lic, machine.machine_id_hash)
-        return Response({'token': token, 'expires_at': expires_at.isoformat()})
-
-
-class LicenseMachineListView(APIView):
-    """List active machines registered to the authenticated user's license(s)."""
-    permission_classes = [IsAuthenticated]
-
-    def get(self, request):
-        machines = (
-            LicenseMachine.objects
-            .filter(license__user=request.user, is_active=True)
-            .select_related('license__product')
-            .order_by('license__product__name', '-last_seen')
-        )
-        data = [
-            {
-                'machine_id_hash': m.machine_id_hash,
-                'label':           m.label,
-                'product':         m.license.product.name,
-                'product_slug':    m.license.product.slug,
-                'first_seen':      m.first_seen.isoformat(),
-                'last_seen':       m.last_seen.isoformat(),
-            }
-            for m in machines
-        ]
-        return Response(data)
-
-
-class LicenseMachineDeactivateView(APIView):
-    """Deactivate a machine so the license slot can be reused on another PC."""
-    permission_classes = [IsAuthenticated]
-
-    def delete(self, request, machine_id_hash):
-        machine = get_object_or_404(
-            LicenseMachine,
-            license__user=request.user,
-            machine_id_hash=machine_id_hash,
-            is_active=True,
-        )
-        machine.is_active = False
-        machine.save(update_fields=['is_active'])
-        logger.info('User %s deactivated machine %s', request.user.pk, machine_id_hash[:8])
-        return Response(status=204)
-
-
-class LicenseListView(APIView):
-    """List the authenticated user's active licenses."""
-    permission_classes = [IsAuthenticated]
-
-    def get(self, request):
-        licenses = (
-            LicenseKey.objects
-            .filter(user=request.user, is_active=True)
-            .select_related('product')
-            .prefetch_related('machines')
-        )
-        return Response(UserLicenseSerializer(licenses, many=True).data)
-
-
-def _generate_install_token():
-    raw = secrets.token_hex(8).upper()
-    return f'{raw[:4]}-{raw[4:8]}-{raw[8:12]}-{raw[12:16]}'
-
-
-class InstallTokenCreateView(APIView):
-    """Generate a single-use install token for a license. The client exchanges it for the real key."""
-    permission_classes = [IsAuthenticated]
-
-    def post(self, request, pk):
-        license = get_object_or_404(LicenseKey, pk=pk, user=request.user, is_active=True)
-        token      = _generate_install_token()
-        expires_at = timezone.now() + timedelta(hours=24)
-        InstallToken.objects.create(token=token, license=license, expires_at=expires_at)
-        logger.info('Install token created for license %s (user %s)', license.pk, request.user.pk)
-        return Response({'token': token, 'expires_at': expires_at.isoformat()})
-
-
-@method_decorator(csrf_exempt, name='dispatch')
-class InstallTokenExchangeView(APIView):
-    """Exchange a single-use install token for the license key. No authentication required."""
-    permission_classes = [AllowAny]
-
-    def post(self, request):
-        token_str = (request.data.get('token') or '').strip().upper()
-        if not token_str:
-            return Response({'error': 'token is required.'}, status=400)
-
-        try:
-            install_token = InstallToken.objects.select_related('license__product').get(token=token_str)
-        except InstallToken.DoesNotExist:
-            return Response({'error': 'Invalid or expired token.'}, status=400)
-
-        if install_token.used_at is not None:
-            return Response({'error': 'Token has already been used.'}, status=400)
-
-        if install_token.expires_at < timezone.now():
-            return Response({'error': 'Token has expired.'}, status=400)
-
-        install_token.used_at = timezone.now()
-        install_token.save(update_fields=['used_at'])
-
-        lic = install_token.license
-        logger.info('Install token exchanged for license %s (user %s)', lic.pk, lic.user_id)
-        return Response({
-            'license_key':  str(lic.key),
-            'product_slug': lic.product.slug,
-            'product_name': lic.product.name,
-        })

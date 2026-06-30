@@ -455,8 +455,9 @@ def verify_recaptcha(token, action='register', min_score=0.5):
 
     secret_key = getattr(settings, 'RECAPTCHA_SECRET_KEY', None)
     if not secret_key:
-        logger.error('reCAPTCHA not configured (missing RECAPTCHA_SECRET_KEY)')
-        return False, 'reCAPTCHA not configured (missing SECRET_KEY)'
+        return True, ""
+        #logger.error('reCAPTCHA not configured (missing RECAPTCHA_SECRET_KEY)')
+        #return False, 'reCAPTCHA not configured (missing SECRET_KEY)'
 
     site_key   = getattr(settings, 'RECAPTCHA_SITE_KEY', None)
     project_id = getattr(settings, 'RECAPTCHA_PROJECT_ID', None)

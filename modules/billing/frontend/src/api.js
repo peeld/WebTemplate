@@ -45,9 +45,6 @@ export const adminDeleteProduct = (id) =>
 export const adminGetSubscriptions = () =>
   get('/api/billing/admin/subscriptions/');
 
-export const adminGetLicenses = () =>
-  get('/api/billing/admin/licenses/');
-
 export const adminCheckSubscriptionSync = () =>
   get('/api/billing/admin/subscriptions/sync/');
 
@@ -85,11 +82,3 @@ export const executeCart = (paymentMethod, items, setupIntentId = null) =>
     ...(setupIntentId ? { setup_intent_id: setupIntentId } : {}),
   });
 
-export const getLicenses = () =>
-  get('/api/billing/license/');
-
-export const createInstallToken = (licenseId) =>
-  post(`/api/billing/license/${licenseId}/install-token/`, {});
-
-export const exchangeInstallToken = (token) =>
-  post('/api/billing/license/install-token/exchange/', { token });

@@ -7,7 +7,6 @@ import {
   adminUpdateProduct,
   adminDeleteProduct,
   adminGetSubscriptions,
-  adminGetLicenses,
   adminSyncProduct,
   adminCreateProductPrice,
   adminUpdateProductPrice,
@@ -673,10 +672,8 @@ function ImagesPanel({ productId, initialImages = [], onError, thumbnail, onThum
 export default function AdminBillingPage() {
   const [products, setProducts]             = useState([]);
   const [subscriptions, setSubscriptions]   = useState([]);
-  const [licenses, setLicenses]             = useState([]);
   const [loadingP, setLoadingP]             = useState(true);
   const [loadingS, setLoadingS]             = useState(true);
-  const [loadingL, setLoadingL]             = useState(true);
   const [error, setError]                   = useState(null);
   const [activeTab, setActiveTab]           = useState('products');
   const [editingId, setEditingId]           = useState(null);
@@ -702,7 +699,6 @@ export default function AdminBillingPage() {
   useEffect(() => {
     if (!hasValidToken()) {
       setLoadingP(false);
-      setLoadingS(false);
       return;
     }
 
@@ -734,19 +730,8 @@ export default function AdminBillingPage() {
       finally { setLoadingS(false); }
     }
 
-    async function loadLicenses() {
-      try {
-        const r = await adminGetLicenses();
-        if (!r.ok) { setLoadingL(false); return; }
-        const data = await r.json();
-        if (Array.isArray(data)) setLicenses(data);
-      } catch { /* surfaced via products load */ }
-      finally { setLoadingL(false); }
-    }
-
     loadProducts().catch(() => { setError('Network error loading products.'); setLoadingP(false); });
     loadSubscriptions();
-    loadLicenses();
   }, []);
 
   function startEdit(product) {
@@ -915,7 +900,7 @@ export default function AdminBillingPage() {
     finally { setSyncFixing(false); }
   }
 
-  if (!loadingP && !loadingS && !hasValidToken() && !error) {
+  if (!loadingP && !hasValidToken() && !error) {
     return (
       <section className="section">
         <div className="container">
@@ -955,14 +940,6 @@ export default function AdminBillingPage() {
                 Subscriptions
                 {!loadingS && subscriptions.length > 0 && (
                   <span className="tag is-rounded is-light ml-2" style={{ fontSize: '0.7rem' }}>{subscriptions.length}</span>
-                )}
-              </a>
-            </li>
-            <li className={activeTab === 'licenses' ? 'is-active' : ''}>
-              <a onClick={() => setActiveTab('licenses')}>
-                Licenses
-                {!loadingL && licenses.length > 0 && (
-                  <span className="tag is-rounded is-light ml-2" style={{ fontSize: '0.7rem' }}>{licenses.length}</span>
                 )}
               </a>
             </li>
@@ -1127,58 +1104,6 @@ export default function AdminBillingPage() {
                   )}
                 </div>
               )
-            )}
-          </>
-        )}
-
-        {activeTab === 'licenses' && (
-          <>
-            {loadingL && <p className="has-text-grey">Loading licenses…</p>}
-
-            {!loadingL && licenses.length === 0 && (
-              <p className="has-text-grey">No licenses found.</p>
-            )}
-
-            {!loadingL && licenses.length > 0 && (
-              <div className="table-container">
-                <table className="table is-fullwidth is-striped is-hoverable is-size-7">
-                  <thead>
-                    <tr>
-                      <th>User</th>
-                      <th>Product</th>
-                      <th>Key</th>
-                      <th>Status</th>
-                      <th>Subscription</th>
-                      <th>Machines</th>
-                      <th>Created</th>
-                    </tr>
-                  </thead>
-                  <tbody>
-                    {licenses.map(lic => (
-                      <tr key={lic.id}>
-                        <td>
-                          <p>{lic.username}</p>
-                          <p className="has-text-grey">{lic.user_email}</p>
-                        </td>
-                        <td>{lic.product_name}</td>
-                        <td><code className="has-text-grey">{String(lic.key).slice(0, 8)}…</code></td>
-                        <td>
-                          <span className={`tag is-small ${lic.is_active ? 'is-success' : 'is-light'}`}>
-                            {lic.is_active ? 'Active' : 'Inactive'}
-                          </span>
-                        </td>
-                        <td>
-                          {lic.subscription_status
-                            ? <span className={`tag is-small ${STATUS_COLOR[lic.subscription_status] || 'is-light'}`}>{lic.subscription_status.replace(/_/g, ' ')}</span>
-                            : <span className="has-text-grey">—</span>}
-                        </td>
-                        <td>{lic.machines_used} / {lic.max_machines}</td>
-                        <td>{new Date(lic.created_at).toLocaleDateString()}</td>
-                      </tr>
-                    ))}
-                  </tbody>
-                </table>
-              </div>
             )}
           </>
         )}

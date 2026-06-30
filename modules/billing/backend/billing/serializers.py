@@ -1,6 +1,6 @@
 from django.utils import timezone
 from rest_framework import serializers
-from .models import InstallToken, LicenseKey, Product, ProductImage, ProductPrice, Subscription, SubscriptionItem
+from .models import Product, ProductImage, ProductPrice, Subscription, SubscriptionItem
 
 
 class ProductImageSerializer(serializers.ModelSerializer):
@@ -136,36 +136,3 @@ class AdminSubscriptionSerializer(serializers.ModelSerializer):
         return max((obj.current_period_end - timezone.now()).days, 0)
 
 
-class UserLicenseSerializer(serializers.ModelSerializer):
-    product_name  = serializers.CharField(source='product.name', read_only=True)
-    product_slug  = serializers.CharField(source='product.slug', read_only=True)
-    machines_used = serializers.SerializerMethodField()
-
-    class Meta:
-        model  = LicenseKey
-        fields = ['id', 'product_name', 'product_slug', 'is_active', 'expires_at', 'max_machines', 'machines_used']
-
-    def get_machines_used(self, obj):
-        return obj.machines.filter(is_active=True).count()
-
-
-class AdminLicenseSerializer(serializers.ModelSerializer):
-    user_email          = serializers.CharField(source='user.email', read_only=True)
-    username            = serializers.CharField(source='user.username', read_only=True)
-    product_name        = serializers.CharField(source='product.name', read_only=True)
-    machines_used       = serializers.SerializerMethodField()
-    subscription_status = serializers.SerializerMethodField()
-
-    class Meta:
-        model  = LicenseKey
-        fields = [
-            'id', 'user_email', 'username', 'product_name',
-            'key', 'is_active', 'expires_at', 'max_machines', 'machines_used',
-            'offline_ttl_days', 'subscription_status', 'created_at',
-        ]
-
-    def get_machines_used(self, obj):
-        return obj.machines.filter(is_active=True).count()
-
-    def get_subscription_status(self, obj):
-        return obj.subscription.status if obj.subscription else None

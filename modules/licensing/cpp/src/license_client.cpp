@@ -83,7 +83,7 @@ InstallTokenResult LicenseClient::exchange_install_token(const std::string& inst
     httplib::Client cli(base_url_);
     cli.set_connection_timeout(10);
     cli.set_read_timeout(30);
-    auto res = cli.Post("/api/billing/license/install-token/exchange/",
+    auto res = cli.Post("/api/licensing/install-token/exchange/",
                         {{"Content-Type", "application/json"}},
                         body.dump(), "application/json");
     check_response(res, "/license/install-token/exchange/");
@@ -108,7 +108,7 @@ ActivateResult LicenseClient::activate(const std::string& license_key,
     httplib::Client cli(base_url_);
     cli.set_connection_timeout(10);
     cli.set_read_timeout(30);
-    auto res = cli.Post("/api/billing/license/activate/", hdrs, body.dump(), "application/json");
+    auto res = cli.Post("/api/licensing/activate/", hdrs, body.dump(), "application/json");
     check_response(res, "/license/activate/");
 
     auto j = json::parse(res->body);
@@ -129,7 +129,7 @@ CheckinResult LicenseClient::machine_checkin(const std::string& product_slug,
     httplib::Client cli(base_url_);
     cli.set_connection_timeout(10);
     cli.set_read_timeout(30);
-    auto res = cli.Post("/api/billing/license/machine-checkin/", hdrs, "{}", "application/json");
+    auto res = cli.Post("/api/licensing/machine-checkin/", hdrs, "{}", "application/json");
     check_response(res, "/license/machine-checkin/");
 
     auto j = json::parse(res->body);
@@ -148,7 +148,7 @@ CheckinResult LicenseClient::checkin(const std::string& license_key) {
     httplib::Client cli(base_url_);
     cli.set_connection_timeout(10);
     cli.set_read_timeout(30);
-    auto res = cli.Post("/api/billing/license/checkin/", hdrs, "{}", "application/json");
+    auto res = cli.Post("/api/licensing/checkin/", hdrs, "{}", "application/json");
     check_response(res, "/license/checkin/");
 
     auto j = json::parse(res->body);

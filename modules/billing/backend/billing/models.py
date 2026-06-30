@@ -1,5 +1,3 @@
-import uuid
-
 from django.conf import settings
 from django.db import models
 
@@ -129,48 +127,3 @@ class SubscriptionItem(models.Model):
         return f'{self.subscription} — {self.stripe_price_id}'
 
 
-class LicenseKey(models.Model):
-    user             = models.ForeignKey(settings.AUTH_USER_MODEL, on_delete=models.CASCADE, related_name='license_keys')
-    product          = models.ForeignKey(Product, on_delete=models.CASCADE, related_name='license_keys')
-    subscription     = models.ForeignKey('Subscription', null=True, blank=True, on_delete=models.SET_NULL, related_name='license_keys')
-    key              = models.UUIDField(unique=True, default=uuid.uuid4, editable=False)
-    is_active        = models.BooleanField(default=True)
-    expires_at       = models.DateTimeField(null=True, blank=True, help_text='Expiry for prepay (non-subscription) licenses; stacks on each purchase')
-    max_machines     = models.PositiveIntegerField(default=1)
-    offline_ttl_days = models.PositiveIntegerField(default=30)
-    created_at       = models.DateTimeField(auto_now_add=True)
-
-    class Meta:
-        unique_together = [('user', 'product')]
-        verbose_name        = 'License'
-        verbose_name_plural = 'Licenses'
-
-    def __str__(self):
-        return f'{self.user} — {self.product.name} ({self.key})'
-
-
-class InstallToken(models.Model):
-    token      = models.CharField(max_length=19, unique=True)
-    license    = models.ForeignKey(LicenseKey, on_delete=models.CASCADE, related_name='install_tokens')
-    created_at = models.DateTimeField(auto_now_add=True)
-    expires_at = models.DateTimeField()
-    used_at    = models.DateTimeField(null=True, blank=True)
-
-    def __str__(self):
-        return f'{self.license} — {self.token}'
-
-
-class LicenseMachine(models.Model):
-    license         = models.ForeignKey(LicenseKey, on_delete=models.CASCADE, related_name='machines')
-    machine_id_hash = models.CharField(max_length=64)
-    label           = models.CharField(max_length=255, blank=True)
-    machine_secret  = models.CharField(max_length=64, blank=True, default='')
-    first_seen      = models.DateTimeField(auto_now_add=True)
-    last_seen       = models.DateTimeField(auto_now=True)
-    is_active       = models.BooleanField(default=True)
-
-    class Meta:
-        unique_together = [('license', 'machine_id_hash')]
-
-    def __str__(self):
-        return f'{self.license.user} — {self.label or self.machine_id_hash[:16]}'

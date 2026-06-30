@@ -4,11 +4,8 @@ from .views import (
     CheckoutView, PortalView, PricesView, ProductsView, SubscriptionView, WebhookView,
     CancelSubscriptionView, ResumeSubscriptionView, ChangeSubscriptionView,
     AdminProductListView, AdminProductDetailView, AdminSubscriptionListView, AdminSubscriptionSyncView,
-    AdminLicenseListView,
     AdminProductPriceListView, AdminProductPriceDetailView, AdminProductSyncView,
     AdminProductImageListView, AdminProductImageDetailView,
-    LicenseActivateView, LicenseCheckinView, MachineCheckinView, LicenseMachineListView, LicenseMachineDeactivateView,
-    LicenseListView, InstallTokenCreateView, InstallTokenExchangeView,
 )
 
 app_name = 'billing'
@@ -32,16 +29,6 @@ urlpatterns = [
     path('admin/products/<int:product_pk>/prices/<int:pk>/', AdminProductPriceDetailView.as_view(), name='admin-product-price-detail'),
     path('admin/subscriptions/',       AdminSubscriptionListView.as_view(),     name='admin-subscriptions'),
     path('admin/subscriptions/sync/', AdminSubscriptionSyncView.as_view(),     name='admin-subscriptions-sync'),
-    path('admin/licenses/',            AdminLicenseListView.as_view(),          name='admin-licenses'),
     path('admin/products/<int:product_pk>/images/',          AdminProductImageListView.as_view(),   name='admin-product-images'),
     path('admin/products/<int:product_pk>/images/<int:pk>/', AdminProductImageDetailView.as_view(), name='admin-product-image-detail'),
-
-    path('license/',                                     LicenseListView.as_view(),               name='license-list'),
-    path('license/activate/',                            LicenseActivateView.as_view(),           name='license-activate'),
-    path('license/checkin/',                             LicenseCheckinView.as_view(),             name='license-checkin'),
-    path('license/machine-checkin/',                     MachineCheckinView.as_view(),             name='license-machine-checkin'),
-    path('license/machines/',                            LicenseMachineListView.as_view(),         name='license-machines'),
-    path('license/machines/<str:machine_id_hash>/',      LicenseMachineDeactivateView.as_view(),   name='license-machine-deactivate'),
-    path('license/install-token/exchange/',              InstallTokenExchangeView.as_view(),       name='license-install-token-exchange'),
-    path('license/<int:pk>/install-token/',              InstallTokenCreateView.as_view(),         name='license-install-token-create'),
 ]

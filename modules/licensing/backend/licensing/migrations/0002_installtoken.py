@@ -1,11 +1,11 @@
-from django.db import migrations, models
 import django.db.models.deletion
+from django.db import migrations, models
 
 
 class Migration(migrations.Migration):
 
     dependencies = [
-        ('billing', '0009_relax_productprice_unique'),
+        ('licensing', '0001_initial'),
     ]
 
     operations = [
@@ -20,7 +20,7 @@ class Migration(migrations.Migration):
                 ('license', models.ForeignKey(
                     on_delete=django.db.models.deletion.CASCADE,
                     related_name='install_tokens',
-                    to='billing.licensekey',
+                    to='licensing.licensekey',
                 )),
             ],
         ),

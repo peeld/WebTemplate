@@ -40,3 +40,5 @@ For information about how modules are set up check ARCHITECTURE.md here are some
 If the user asks a question, answer the question then suggest changes rather than directly editing code. 
 For example "can we change a to b?" is a question that you should evaluate and answer rather than actually
 doing the task.  "Change a to b" is a statement that can be directly implemented.
+
+if you need to run manage.py the command is: venv\scripts\python.exe core\backend\manage.py

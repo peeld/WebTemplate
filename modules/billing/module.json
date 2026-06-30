@@ -5,18 +5,13 @@
   "npm_package": "@modules/billing",
   "url_prefix": "billing",
   "requires": [],
-  "pip_packages": ["stripe>=7.0", "PyJWT>=2.8", "cryptography>=42"],
+  "pip_packages": ["stripe>=7.0"],
   "settings_defaults": {
     "STRIPE_SECRET_KEY": "",
     "STRIPE_PUBLISHABLE_KEY": "",
     "STRIPE_WEBHOOK_SECRET": "",
     "STRIPE_SUCCESS_URL": "",
-    "STRIPE_CANCEL_URL": "",
-    "LICENSE_APP_SECRET": "",
-    "LICENSE_RSA_PRIVATE_KEY_PATH": "",
-    "LICENSE_RSA_PUBLIC_KEY_PATH": "",
-    "LICENSE_DEFAULT_MAX_MACHINES": 1,
-    "LICENSE_DEFAULT_OFFLINE_TTL_DAYS": 30
+    "STRIPE_CANCEL_URL": ""
   },
   "description": "Stripe billing — one-time payments, subscriptions, customer portal, and webhooks."
 }

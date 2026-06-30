@@ -1,6 +1,6 @@
 from django.contrib import admin
 from django.utils import timezone
-from .models import LicenseKey, LicenseMachine, Product, ProductPrice, StripeCustomer, Subscription, SubscriptionItem
+from .models import Product, ProductPrice, StripeCustomer, Subscription, SubscriptionItem
 
 
 class ProductPriceInline(admin.TabularInline):
@@ -70,38 +70,3 @@ class SubscriptionAdmin(admin.ModelAdmin):
         return max((obj.current_period_end - timezone.now()).days, 0)
 
 
-class LicenseMachineInline(admin.TabularInline):
-    model        = LicenseMachine
-    extra        = 0
-    fields       = ('machine_id_hash', 'label', 'is_active', 'first_seen', 'last_seen')
-    readonly_fields = ('machine_id_hash', 'first_seen', 'last_seen')
-
-
-@admin.register(LicenseKey)
-class LicenseKeyAdmin(admin.ModelAdmin):
-    list_display    = ('user', 'product', 'key', 'is_active', 'subscription_status', 'machines_used', 'max_machines', 'created_at')
-    list_filter     = ('is_active', 'product')
-    search_fields   = ('user__username', 'user__email', 'key')
-    readonly_fields = ('key', 'created_at')
-    inlines         = [LicenseMachineInline]
-
-    def get_queryset(self, request):
-        return super().get_queryset(request).select_related('subscription').prefetch_related('machines')
-
-    @admin.display(description='Subscription')
-    def subscription_status(self, obj):
-        if obj.subscription:
-            return obj.subscription.get_status_display()
-        return '—'
-
-    @admin.display(description='Machines used')
-    def machines_used(self, obj):
-        return sum(1 for m in obj.machines.all() if m.is_active)
-
-
-@admin.register(LicenseMachine)
-class LicenseMachineAdmin(admin.ModelAdmin):
-    list_display    = ('license', 'machine_id_hash', 'label', 'is_active', 'last_seen')
-    list_filter     = ('is_active',)
-    search_fields   = ('license__user__username', 'machine_id_hash', 'label')
-    readonly_fields = ('machine_id_hash', 'first_seen', 'last_seen')
