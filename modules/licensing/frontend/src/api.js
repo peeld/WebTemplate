@@ -55,3 +55,18 @@ export const patchAdminVendorPool = (vendorId, poolId, data) =>
 
 export const getAdminBillingProducts = () =>
   get('/api/billing/admin/products/');
+
+// Submits an HMAC-signed offline trial-request payload (built by the C++
+// client's build_offline_trial_payload() and carried here via URL query
+// params) to the same endpoint the app calls directly when online.
+export const requestTrialFromPayload = ({ product, email, mid, ts, nonce, sig }) =>
+  apiFetch('/api/licensing/trial/request/', {
+    method: 'POST',
+    headers: {
+      'X-Machine-ID': mid,
+      'X-Timestamp':  ts,
+      'X-Nonce':      nonce,
+      'X-Signature':  sig,
+    },
+    body: JSON.stringify({ product_slug: product, email }),
+  });

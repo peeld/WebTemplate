@@ -1,5 +1,5 @@
 from django.contrib import admin
-from .models import InstallToken, LicenseKey, LicenseMachine
+from .models import InstallToken, LicenseKey, LicenseMachine, TrialClaim
 
 
 class LicenseMachineInline(admin.TabularInline):
@@ -39,3 +39,11 @@ class InstallTokenAdmin(admin.ModelAdmin):
     list_filter     = ('used_at',)
     search_fields   = ('token', 'license__key', 'license__user__username')
     readonly_fields = ('token', 'created_at', 'used_at')
+
+
+@admin.register(TrialClaim)
+class TrialClaimAdmin(admin.ModelAdmin):
+    list_display    = ('email', 'product', 'machine_id_hash', 'license', 'created_at')
+    list_filter     = ('product',)
+    search_fields   = ('email', 'machine_id_hash', 'license__key')
+    readonly_fields = ('machine_id_hash', 'created_at')

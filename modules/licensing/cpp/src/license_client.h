@@ -42,6 +42,19 @@ public:
     // Renew offline JWT using license key UUID (legacy — still supported)
     CheckinResult checkin(const std::string& license_key);
 
+    // Request a 30-day trial for product_slug — no admin approval. On success the
+    // server emails a single-use install token to `email`; exchange it with
+    // exchange_install_token() and activate() as usual. One trial per machine per
+    // product: a machine that already claimed a trial for this product gets an error.
+    void request_trial(const std::string& product_slug, const std::string& email);
+
+    // Build a signed trial-request URL without making any network call — for use
+    // when this machine is offline. Display it (e.g. as a QR code); opening it on
+    // any connected device POSTs to the same endpoint as request_trial(). Valid
+    // for 24 hours from the moment it's built.
+    std::string build_offline_trial_payload(const std::string& product_slug,
+                                             const std::string& email) const;
+
     // SHA-256 hex of this machine's raw ID — store alongside machine_secret after activation
     const std::string& machine_id_hash() const { return machine_id_hash_; }
 

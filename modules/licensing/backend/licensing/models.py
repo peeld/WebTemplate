@@ -40,7 +40,7 @@ class LicenseKey(models.Model):
     offline_ttl_days = models.PositiveIntegerField(default=30)
     source           = models.CharField(
         max_length=10,
-        choices=[('stripe', 'Stripe'), ('vendor', 'Vendor')],
+        choices=[('stripe', 'Stripe'), ('vendor', 'Vendor'), ('trial', 'Trial')],
         default='stripe',
     )
     vendor_pool      = models.ForeignKey(
@@ -92,6 +92,24 @@ class LicenseMachine(models.Model):
 
     def __str__(self):
         return f'{self.license.product.name} — {self.label or self.machine_id_hash[:16]}'
+
+
+class TrialClaim(models.Model):
+    """Binds a self-service trial to a machine so one machine can't re-claim
+    a trial for the same product under a new email address. This constraint,
+    not the email address, is what makes the trial flow abuse-resistant."""
+    product         = models.ForeignKey('billing.Product', on_delete=models.CASCADE, related_name='trial_claims')
+    machine_id_hash = models.CharField(max_length=64)
+    email           = models.EmailField()
+    license         = models.OneToOneField(LicenseKey, on_delete=models.CASCADE, related_name='trial_claim')
+    ip_address      = models.GenericIPAddressField(null=True, blank=True)
+    created_at      = models.DateTimeField(auto_now_add=True)
+
+    class Meta:
+        unique_together = [('product', 'machine_id_hash')]
+
+    def __str__(self):
+        return f'TrialClaim({self.email} — {self.product.slug} — {self.machine_id_hash[:12]})'
 
 
 class VendorProfile(models.Model):

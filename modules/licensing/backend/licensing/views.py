@@ -8,16 +8,18 @@ from datetime import timedelta
 import jwt
 from django.apps import apps
 from django.conf import settings
+from django.core.exceptions import ValidationError as DjangoValidationError
+from django.core.validators import validate_email
+from django.db import IntegrityError, transaction
 from django.utils import timezone
 from rest_framework.permissions import AllowAny, IsAdminUser, IsAuthenticated
 from rest_framework.response import Response
 from rest_framework.throttling import AnonRateThrottle
 from rest_framework.views import APIView
 
-from django.db import transaction
-
+from .emails import send_trial_email
 from .models import (
-    InstallToken, LicenseKey, LicenseMachine,
+    InstallToken, LicenseKey, LicenseMachine, TrialClaim,
     VendorInstallToken, VendorInvoice, VendorInvoiceLineItem,
     VendorLicensePool, VendorProfile,
     _generate_install_token, _hash_token,
@@ -34,6 +36,14 @@ from .serializers import (
 logger = logging.getLogger(__name__)
 
 _REPLAY_WINDOW = 300  # seconds
+
+# Trial-request payloads can be built offline and submitted hours later from a
+# different device (see build_offline_trial_payload() in the C++ client), so
+# they need a much wider window than the online HMAC endpoints above. This is
+# safe because the actual double-spend guard is the TrialClaim
+# (product, machine_id_hash) uniqueness constraint, not this timestamp check —
+# a replayed payload just fails that constraint instead of granting a second trial.
+_TRIAL_REQUEST_WINDOW = 60 * 60 * 24  # 24 hours
 
 
 def _verify_legacy_hmac(request):
@@ -77,6 +87,13 @@ def _issue_jwt(license_key_obj, machine):
     """Sign and return (token_str, expires_at_iso) for a verified machine."""
     ttl_days = license_key_obj.offline_ttl_days or getattr(settings, 'LICENSE_DEFAULT_OFFLINE_TTL_DAYS', 30)
     exp = timezone.now() + timedelta(days=ttl_days)
+
+    # Cap the JWT's own expiry at the license's expiry. Without this, a machine
+    # that checks in shortly before a time-limited license (e.g. a trial) expires
+    # would still walk away with a fresh offline_ttl_days-long JWT — letting it
+    # keep working fully offline well past the license's actual cutoff.
+    if license_key_obj.expires_at:
+        exp = min(exp, license_key_obj.expires_at)
 
     payload = {
         'license': str(license_key_obj.key),
@@ -218,6 +235,107 @@ class InstallTokenExchangeView(APIView):
             'product_slug':  product.slug,
             'product_name':  product.name,
         })
+
+
+class TrialRequestThrottle(AnonRateThrottle):
+    scope = 'trial_request'
+    rate = '5/hour'
+
+
+class TrialRequestView(APIView):
+    """Self-service 30-day trial — no admin approval.
+
+    HMAC-signed with LICENSE_APP_SECRET (same scheme as legacy activate/checkin):
+      message = product_slug + email + machine_id_hash + timestamp + nonce
+
+    One trial per machine per product, enforced by the TrialClaim
+    (product, machine_id_hash) uniqueness constraint — not by the email address,
+    which is only used for delivery. On success, a single-use InstallToken is
+    emailed to `email`; nothing sensitive is returned in the HTTP response.
+    """
+    permission_classes = [AllowAny]
+    throttle_classes = [TrialRequestThrottle]
+
+    def post(self, request):
+        product_slug = request.data.get('product_slug', '')
+        email        = request.data.get('email', '')
+        machine_id   = request.META.get('HTTP_X_MACHINE_ID', '')
+        timestamp    = request.META.get('HTTP_X_TIMESTAMP', '')
+        nonce        = request.META.get('HTTP_X_NONCE', '')
+        signature    = request.META.get('HTTP_X_SIGNATURE', '')
+
+        if not all([product_slug, email, machine_id, timestamp, nonce, signature]):
+            return Response({'error': 'Missing required fields.'}, status=400)
+
+        try:
+            validate_email(email)
+        except DjangoValidationError:
+            return Response({'error': 'Invalid email address.'}, status=400)
+
+        try:
+            ts = int(timestamp)
+        except (ValueError, TypeError):
+            return Response({'error': 'Invalid timestamp.'}, status=401)
+
+        if abs(int(time.time()) - ts) > _TRIAL_REQUEST_WINDOW:
+            return Response({'error': 'Request timestamp out of window.'}, status=401)
+
+        app_secret = getattr(settings, 'LICENSE_APP_SECRET', '')
+        if not app_secret:
+            return Response({'error': 'Server misconfigured.'}, status=500)
+
+        msg = (product_slug + email + machine_id + timestamp + nonce).encode()
+        expected = hmac.new(app_secret.encode(), msg, hashlib.sha256).hexdigest()
+        if not hmac.compare_digest(expected, signature):
+            return Response({'error': 'Invalid signature.'}, status=401)
+
+        Product = apps.get_model('billing', 'Product')
+        try:
+            product = Product.objects.get(slug=product_slug, is_active=True)
+        except Product.DoesNotExist:
+            return Response({'error': 'Product not found.'}, status=404)
+
+        if TrialClaim.objects.filter(product=product, machine_id_hash=machine_id).exists():
+            return Response({'error': 'A trial has already been used on this machine for this product.'}, status=403)
+
+        ttl_days = getattr(settings, 'LICENSE_DEFAULT_OFFLINE_TTL_DAYS', 30)
+
+        try:
+            with transaction.atomic():
+                license_key = LicenseKey.objects.create(
+                    user=None,
+                    product=product,
+                    source='trial',
+                    is_active=True,
+                    max_machines=1,
+                    expires_at=timezone.now() + timedelta(days=ttl_days),
+                    offline_ttl_days=ttl_days,
+                )
+                TrialClaim.objects.create(
+                    product=product,
+                    machine_id_hash=machine_id,
+                    email=email,
+                    license=license_key,
+                    ip_address=request.META.get('REMOTE_ADDR'),
+                )
+                raw_token = _generate_install_token()
+                InstallToken.objects.create(
+                    license=license_key,
+                    token=_hash_token(raw_token),
+                    expires_at=timezone.now() + timedelta(days=7),
+                )
+        except IntegrityError:
+            return Response({'error': 'A trial has already been used on this machine for this product.'}, status=403)
+
+        try:
+            send_trial_email(email, raw_token, product.name)
+        except Exception:
+            # The license and token already exist regardless of email delivery —
+            # log and let the user request a new install token from the app later
+            # rather than failing a request that already succeeded server-side.
+            logger.exception('Failed to send trial email to %s', email)
+
+        return Response(status=202)
 
 
 class LicenseActivateView(APIView):
