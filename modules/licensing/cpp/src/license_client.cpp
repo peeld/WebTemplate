@@ -96,7 +96,14 @@ void check_response(const httplib::Result& res, const char* endpoint) {
 LicenseClient::LicenseClient(std::string base_url, std::string app_secret)
     : base_url_(std::move(base_url)), app_secret_(std::move(app_secret))
 {
-    machine_id_hash_ = sha256_hex(get_raw_machine_id());
+    std::string id;
+    std::vector<std::string> mac;
+    get_raw_machine_id(id, mac);
+    machine_id_hash_ = sha256_hex(id);
+    for (auto& m : mac)
+    {
+        mac_id_hash_.push_back(sha256_hex(m));
+    }
 }
 
 InstallTokenResult LicenseClient::exchange_install_token(const std::string& install_token) {

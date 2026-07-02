@@ -1,10 +1,12 @@
 #pragma once
 #include <string>
+#include <vector>
 
 struct VerifyResult {
     std::string license;  // license UUID from JWT
     std::string machine;  // machine_id_hash from JWT
     std::string product;  // product slug from JWT
+    std::vector< std::string > mac; // mac addresses from JWT
     long long   exp = 0;  // expiry as unix timestamp
 
     // Seconds our effective clock is behind the server's iat timestamp.

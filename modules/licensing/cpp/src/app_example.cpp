@@ -28,8 +28,8 @@ using json = nlohmann::json;
 // In production these are injected by the build system (e.g. via -D flags or
 // a generated config header), never edited by hand in source.
 
-static const char* SERVER_URL   = "http://localhost:5173";
-static const char* PRODUCT_SLUG = "testproduct";
+static const char* SERVER_URL   = "http://beta.peeldev.com:5173";
+static const char* PRODUCT_SLUG = "peelcapture";
 static const char* APP_SECRET   = "WhatIsAGoodSecret?";
 
 // Embed the full RSA public key PEM here at build time.
@@ -137,8 +137,36 @@ static VerifyResult check_license(Credentials& creds) {
     // Full check: signature, expiry, and machine binding.
     auto vr = verifier.verify(creds.offline_jwt);
 
-    if (vr.machine != sha256_hex(get_raw_machine_id()))
+    std::string id;
+    std::vector<std::string> mac;
+    get_raw_machine_id(id, mac);
+
+    if (vr.machine != sha256_hex(id))
         throw std::runtime_error("License is bound to a different machine");
+
+    for (auto& i : mac)
+    {
+        i = sha256_hex(i);
+    }
+
+    std::sort(mac.begin(), mac.end());
+    std::sort(vr.mac.begin(), vr.mac.end());
+
+    // 1. Similar items (Intersection)
+    std::vector<std::string> intersection;
+    std::set_intersection(mac.begin(), mac.end(), vr.mac.begin(), vr.mac.end(), std::back_inserter(intersection));
+
+    // 2. Different items (Symmetric Difference)
+    std::vector<std::string> diff1, diff2, symmetric_diff;
+    std::set_symmetric_difference(mac.begin(), mac.end(), vr.mac.begin(), vr.mac.end(), std::back_inserter(symmetric_diff));
+
+    size_t similar_count = intersection.size();
+    size_t different_count = symmetric_diff.size();
+
+    // Use a slightly different message so we can track it, but not give away what we are testing for - note the . at the end
+    if (similar_count < different_count) {
+        throw std::runtime_error("License is bound to a different machine.");
+    }
 
     if (vr.product != std::string(PRODUCT_SLUG))
         throw std::runtime_error("License product does not match this application");
@@ -180,3 +208,4 @@ int main(int argc, char** argv) {
 
     return 0;
 }
+

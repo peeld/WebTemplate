@@ -21,7 +21,7 @@ namespace fs = std::filesystem;
 
 namespace {
 
-// ── Base64url ────────────────────────────────────────────────────────────────
+// -- Base64url ----------------------------------------------------------------
 
 std::vector<uint8_t> b64url_decode(std::string s) {
     for (auto& c : s) {
@@ -43,7 +43,7 @@ std::vector<uint8_t> b64url_decode(std::string s) {
     return out;
 }
 
-// ── JWT parsing ──────────────────────────────────────────────────────────────
+// -- JWT parsing --------------------------------------------------------------
 
 struct JwtParts {
     std::string      header_b64;
@@ -106,7 +106,7 @@ void check_rs256(const JwtParts& p, const std::string& pem) {
         throw std::runtime_error("RS256 signature verification failed");
 }
 
-// ── Time cross-checking ──────────────────────────────────────────────────────
+// -- Time cross-checking ------------------------------------------------------
 
 // C++17: convert file_time_type to unix seconds via a system_clock delta.
 // (clock_cast is C++20; this approach snapshots both clocks and applies the offset.)
@@ -156,7 +156,7 @@ long long max_file_timestamp() {
     return best;
 }
 
-// ── Anti-rollback checkpoint ─────────────────────────────────────────────────
+// -- Anti-rollback checkpoint -------------------------------------------------
 
 // XOR mask so the stored bytes don't look like a raw unix timestamp.
 constexpr uint64_t CHECKPOINT_MASK = 0xA3C5E7F192B4D608ULL;
@@ -197,7 +197,7 @@ long long effective_now(const std::string& checkpoint_path) {
     return std::max({sys, file_max, checkpoint});
 }
 
-// ── Claims extraction ────────────────────────────────────────────────────────
+// -- Claims extraction --------------------------------------------------------
 
 VerifyResult extract_claims(const json& payload, long long now) {
     VerifyResult r;
@@ -206,6 +206,7 @@ VerifyResult extract_claims(const json& payload, long long now) {
         r.machine = payload.at("machine").get<std::string>();
         r.product = payload.at("product").get<std::string>();
         r.exp     = payload.at("exp").get<long long>();
+        r.mac     = payload.at("mac").get<std::vector < std::string > >();
     } catch (const json::exception& e) {
         throw std::runtime_error(std::string("JWT missing required claim: ") + e.what());
     }
@@ -231,7 +232,7 @@ VerifyResult extract_claims(const json& payload, long long now) {
 
 } // namespace
 
-// ── LicenseVerifier ──────────────────────────────────────────────────────────
+// -- LicenseVerifier ----------------------------------------------------------
 
 LicenseVerifier::LicenseVerifier(std::string public_key_pem,
                                  std::string checkpoint_path)

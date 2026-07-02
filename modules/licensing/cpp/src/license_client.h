@@ -1,5 +1,6 @@
 #pragma once
 #include <string>
+#include <vector>
 
 struct InstallTokenResult {
     std::string license_key;
@@ -62,4 +63,5 @@ private:
     std::string base_url_;
     std::string app_secret_;
     std::string machine_id_hash_;
+    std::vector<std::string> mac_id_hash_;
 };
